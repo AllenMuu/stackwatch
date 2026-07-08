@@ -29,6 +29,20 @@ L3 LLM 簇代表根因分析 -> 真正调 LLM（仅占异常总量约 1%）
 
 成本阶梯：L1 ≈ 0 -> L2 ≈ 0 -> L3 才花钱。
 
+## 环境要求
+
+- **JDK 17+**（Spring Boot 3.4 + Spring AI 1.0 强制要求，不支持 Java 8/11）
+- Maven 3.6+
+
+若 `mvn -v` 显示的 Java 版本非 17，构建与运行前需切换：
+
+```bash
+# macOS 查看已安装 JDK
+/usr/libexec/java_home -V
+# 指定 JDK 17（建议写入 ~/.zshrc 持久化）
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+```
+
 ## 快速开始
 
 ```bash
