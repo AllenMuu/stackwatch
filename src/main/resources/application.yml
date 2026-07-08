@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: stackwatch
+
+  ai:
+    openai:
+      # DashScope 兼容 OpenAI 协议；切换其他厂商只需改 base-url + model
+      api-key: ${DASHSCOPE_API_KEY:}
+      base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      chat:
+        options:
+          model: ${LLM_CHAT_MODEL:qwen-plus}
+          temperature: 0.2
+      # embedding 暂不启用（L2 向量归并解锁后再配）
+      # embedding:
+      #   options:
+      #     model: text-embedding-v3
+
+stackwatch:
+  analysis:
+    # L2 向量归并相似度阈值
+    similarity-threshold: 0.92
+    # L3 LLM 根因置信度兜底阈值（低于此值转人工）
+    confidence-threshold: 0.6
+    # 指纹参与 hash 的栈顶业务帧数
+    fingerprint-top-n: 5
+  cache:
+    # L1 指纹缓存 TTL（秒），默认 24 小时
+    fingerprint-ttl-seconds: 86400
+    # L1 缓存最大条目
+    fingerprint-max-size: 100000
+
+logging:
+  level:
+    com.stackwatch: INFO

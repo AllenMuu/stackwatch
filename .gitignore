@@ -1,0 +1,31 @@
+# 编译产物
+target/
+build/
+*.class
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+
+# 敏感信息（API Key 永远走环境变量，禁止提交）
+.env
+.env.*
+application-local.yml
+application-secret.yml
+
+# Maven
+*.lastUpdated

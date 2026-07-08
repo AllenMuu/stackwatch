@@ -1,0 +1,141 @@
+package com.stackwatch.analyzer;
+
+import com.stackwatch.config.AnalysisProperties;
+import com.stackwatch.domain.AnalysisResult;
+import com.stackwatch.domain.ErrorCluster;
+import com.stackwatch.domain.ErrorEvent;
+import com.stackwatch.domain.ErrorFingerprint;
+import com.stackwatch.domain.RootCauseAnalysis;
+import com.stackwatch.preprocess.EmbeddingService;
+import com.stackwatch.preprocess.Fingerprinter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * 错误分析器：③分析层核心，三层级联归并。
+ *
+ * L1 指纹精确命中缓存   -> 0 token
+ * L2 向量近似归并       -> 0 token
+ * L3 LLM 簇代表根因分析 -> 真正调 LLM（仅占异常总量约 1%）
+ *
+ * 对应 B1 设计：③分析层 + 置信度兜底（高危点 3）。
+ *
+ * 注意：Spring AI ChatClient 的 .tools() / .entity() API 签名可能随版本变化，以官方文档为准。
+ */
+@Service
+public class ErrorAnalyzer {
+
+    private static final Logger log = LoggerFactory.getLogger(ErrorAnalyzer.class);
+
+    private final Fingerprinter fingerprinter;
+    private final EmbeddingService embeddingService;
+    private final FingerprintCache fingerprintCache;
+    private final ClusterRepository clusterRepository;
+    private final ChatClient chatClient;
+    private final AnalysisTools analysisTools;
+    private final AnalysisProperties properties;
+    private final PromptTemplateHolder promptTemplate;
+
+    public ErrorAnalyzer(Fingerprinter fingerprinter,
+                         EmbeddingService embeddingService,
+                         FingerprintCache fingerprintCache,
+                         ClusterRepository clusterRepository,
+                         ChatClient chatClient,
+                         AnalysisTools analysisTools,
+                         AnalysisProperties properties,
+                         PromptTemplateHolder promptTemplate) {
+        this.fingerprinter = fingerprinter;
+        this.embeddingService = embeddingService;
+        this.fingerprintCache = fingerprintCache;
+        this.clusterRepository = clusterRepository;
+        this.chatClient = chatClient;
+        this.analysisTools = analysisTools;
+        this.properties = properties;
+        this.promptTemplate = promptTemplate;
+    }
+
+    public AnalysisResult analyze(ErrorEvent event) {
+        ErrorFingerprint fp = fingerprinter.generate(event);
+
+        // L1: 指纹精确命中缓存
+        Optional<RootCauseAnalysis> cached = fingerprintCache.lookup(fp.hash());
+        if (cached.isPresent()) {
+            log.debug("L1 cache hit: {}", fp.hash());
+            return AnalysisResult.cacheHit(fp.hash(), cached.get());
+        }
+
+        // L2: 向量近似归并
+        float[] vec = embeddingService.embed(event);
+        if (vec != null) {
+            Optional<ErrorCluster> matched = clusterRepository.findSimilar(vec, properties.similarityThreshold());
+            if (matched.isPresent()) {
+                ErrorCluster updated = matched.get().increment(event.occurredAt());
+                clusterRepository.save(updated);
+                fingerprintCache.put(fp.hash(), updated.analysis());
+                log.debug("L2 vector merged: {} -> cluster {}", fp.hash(), updated.clusterId());
+                return AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis());
+            }
+        }
+
+        // L3: 新簇，调 LLM 分析
+        RootCauseAnalysis raw = callLlm(event, fp);
+        RootCauseAnalysis analyzed = postProcess(raw);
+        String clusterId = "cluster-" + UUID.randomUUID();
+        ErrorCluster newCluster = ErrorCluster.newOne(
+            clusterId, event.appName(), event.exceptionType(),
+            fp.hash(), event.occurredAt(), analyzed, vec);
+        clusterRepository.save(newCluster);
+        fingerprintCache.put(fp.hash(), analyzed);
+        log.info("L3 llm new: {} -> cluster {} (confidence={}, review={})",
+            fp.hash(), clusterId, analyzed.confidence(), analyzed.needHumanReview());
+        return AnalysisResult.llmNew(fp.hash(), clusterId, analyzed);
+    }
+
+    private RootCauseAnalysis callLlm(ErrorEvent event, ErrorFingerprint fp) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("appName", event.appName());
+        vars.put("env", event.env() == null ? "unknown" : event.env());
+        vars.put("occurredAt", String.valueOf(event.occurredAt()));
+        vars.put("exceptionType", event.exceptionType());
+        vars.put("exceptionMessage", event.exceptionMessage());
+        vars.put("stackFrames", String.join("\n", fp.topFrames()));
+        vars.put("mdc", String.valueOf(event.mdc()));
+        vars.put("historicalSamples", "[MVP 阶段无历史样本]");
+
+        String promptText = promptTemplate.render(vars);
+        try {
+            return chatClient.prompt()
+                .user(promptText)
+                .tools(analysisTools)
+                .call()
+                .entity(RootCauseAnalysis.class);
+        } catch (Exception e) {
+            log.warn("LLM call failed for {}: {}", fp.hash(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 置信度兜底 + 规则双判（B1 高危点 3）。
+     * LLM 自评置信度 < 阈值 或 无证据 或 LLM 调用失败 -> 转人工。
+     */
+    private RootCauseAnalysis postProcess(RootCauseAnalysis raw) {
+        if (raw == null) {
+            return new RootCauseAnalysis(
+                "LLM 未返回有效结果", "UNKNOWN", "HIGH", 0.0,
+                "建议人工排查", List.of(), true
+            );
+        }
+        boolean lowConfidence = raw.confidence() < properties.confidenceThreshold();
+        boolean noEvidence = raw.evidence() == null || raw.evidence().isEmpty();
+        return (lowConfidence || noEvidence) ? raw.withReviewFlag(true) : raw;
+    }
+}
