@@ -2,6 +2,7 @@ package com.stackwatch.analyzer;
 
 import com.stackwatch.domain.ErrorCluster;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -21,4 +22,7 @@ public interface ClusterRepository {
 
     /** 按簇 ID 查询。 */
     Optional<ErrorCluster> findById(String clusterId);
+
+    /** 查询所有簇（④聚合层周报 Top N 排序用）。 */
+    List<ErrorCluster> findAll();
 }

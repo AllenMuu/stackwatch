@@ -47,6 +47,12 @@
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
+        <!-- L2 向量归并：PgVector（③分析层 L2，用 @ConditionalOnProperty + autoconfigure.exclude 控制启用） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+        </dependency>
+
         <!-- L1 指纹缓存（MVP 内存实现，生产可换 Redis） -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
@@ -69,12 +75,6 @@
 
         <!--
             以下依赖按周解锁（设计借鉴车险 Demo 的「依赖按需解锁」思想）：
-            到对应迭代阶段取消注释，避免 MVP 阶段被基础设施卡住。
-
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
-        </dependency>
 
         <dependency>
             <groupId>io.github.resilience4j</groupId>

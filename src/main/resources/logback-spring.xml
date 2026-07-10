@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 控制台输出（Spring Boot 默认风格） -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!--
+        StackWatch 采集 Appender：①采集层 Logback 集成。
+        ERROR 级且带异常的日志 -> LogbackErrorAppender -> ErrorEventCollector -> ErrorAnalyzer。
+        class 由 Logback 反射实例化（非 Spring bean），通过 SpringContextHolder 取 collector。
+        ThresholdFilter 仅放行 ERROR 及以上，避免 WARN 级带异常日志触发采集。
+    -->
+    <appender name="ERROR_EVENT" class="com.stackwatch.collector.LogbackErrorAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>ERROR</level>
+        </filter>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ERROR_EVENT"/>
+    </root>
+</configuration>

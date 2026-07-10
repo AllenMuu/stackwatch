@@ -2,6 +2,13 @@ spring:
   application:
     name: stackwatch
 
+  autoconfigure:
+    # L2 关闭时排除 DB 自动装配，确保无 PostgreSQL 也能零基础设施启动
+    # L2 启用时：删除以下两项 + 配置 datasource + 取消 spring.ai.openai.embedding 注释
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
+
   ai:
     openai:
       # DashScope 兼容 OpenAI 协议；切换其他厂商只需改 base-url + model
@@ -29,6 +36,15 @@ stackwatch:
     fingerprint-ttl-seconds: 86400
     # L1 缓存最大条目
     fingerprint-max-size: 100000
+  l2:
+    # L2 默认关闭：false 时走 InMemoryClusterRepository（findSimilar 返回 empty 强制 L3）
+    # 启用需：true + 删除上方 autoconfigure.exclude 两项 + 配 datasource + 取消 embedding 注释
+    enabled: false
+  feishu:
+    # 实时告警/周报推送用自定义机器人 webhook（留空则跳过推送，仅 warn）
+    webhook-url: ${FEISHU_WEBHOOK_URL:}
+    # 飞书 OpenAPI 基址（富文本卡片解锁后使用）
+    api-url: ${FEISHU_API_URL:https://open.feishu.cn/open-apis}
 
 logging:
   level:
