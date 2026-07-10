@@ -3,11 +3,19 @@ spring:
     name: stackwatch
 
   autoconfigure:
-    # L2 关闭时排除 DB 自动装配，确保无 PostgreSQL 也能零基础设施启动
-    # L2 启用时：删除以下两项 + 配置 datasource + 取消 spring.ai.openai.embedding 注释
+    # 关闭未启用基础设施的自动装配，确保零基础设施可启动：
+    # - DataSourceAutoConfiguration / PgVectorStoreAutoConfiguration：L2 向量归并（stackwatch.l2.enabled=false）
+    # - KafkaAutoConfiguration：①采集层 Kafka（stackwatch.collector.kafka.enabled=false）
+    # 启用对应模块时从 exclude 列表移除相关项 + 配置对应依赖
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+  kafka:
+    # Kafka broker 占位；Kafka 关闭时此配置不生效（KafkaAutoConfiguration 已被 exclude）
+    # 启用 Kafka：从 exclude 移除 KafkaAutoConfiguration + 确保 pom 含 spring-kafka + 配 broker
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
 
   ai:
     openai:
@@ -38,13 +46,29 @@ stackwatch:
     fingerprint-max-size: 100000
   l2:
     # L2 默认关闭：false 时走 InMemoryClusterRepository（findSimilar 返回 empty 强制 L3）
-    # 启用需：true + 删除上方 autoconfigure.exclude 两项 + 配 datasource + 取消 embedding 注释
+    # 启用需：true + 从 exclude 移除前两项 + 配 datasource + 取消 embedding 注释
     enabled: false
+  collector:
+    kafka:
+      # ①采集层 Kafka 通道默认关闭（与 Logback Appender + HTTP /collect 并列的第三入口）
+      # 启用需：从 exclude 移除 KafkaAutoConfiguration + 确保 pom 含 spring-kafka + 配 broker
+      enabled: false
+      # Kafka topic 名，producer/consumer 共用
+      topic: error-events
   feishu:
     # 实时告警/周报推送用自定义机器人 webhook（留空则跳过推送，仅 warn）
     webhook-url: ${FEISHU_WEBHOOK_URL:}
     # 飞书 OpenAPI 基址（富文本卡片解锁后使用）
     api-url: ${FEISHU_API_URL:https://open.feishu.cn/open-apis}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: stackwatch
 
 logging:
   level:

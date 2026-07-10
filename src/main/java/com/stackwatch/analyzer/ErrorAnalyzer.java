@@ -1,11 +1,15 @@
 package com.stackwatch.analyzer;
 
 import com.stackwatch.config.AnalysisProperties;
+import com.stackwatch.domain.AnalysisPath;
 import com.stackwatch.domain.AnalysisResult;
 import com.stackwatch.domain.ErrorCluster;
 import com.stackwatch.domain.ErrorEvent;
 import com.stackwatch.domain.ErrorFingerprint;
+import com.stackwatch.domain.FewShotSample;
 import com.stackwatch.domain.RootCauseAnalysis;
+import com.stackwatch.feedback.FewShotRepository;
+import com.stackwatch.metrics.AnalysisMetrics;
 import com.stackwatch.preprocess.EmbeddingService;
 import com.stackwatch.preprocess.Fingerprinter;
 import org.slf4j.Logger;
@@ -18,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 错误分析器：③分析层核心，三层级联归并。
@@ -27,6 +32,8 @@ import java.util.UUID;
  * L3 LLM 簇代表根因分析 -> 真正调 LLM（仅占异常总量约 1%）
  *
  * 对应 B1 设计：③分析层 + 置信度兜底（高危点 3）。
+ * 横切A：埋点 AnalysisPath / 耗时 / 置信度（对应简历"40%"度量底气）。
+ * 横切B：callLlm 注入 few-shot 历史样本（数据飞轮，越用越准）。
  *
  * 注意：Spring AI ChatClient 的 .tools() / .entity() API 签名可能随版本变化，以官方文档为准。
  */
@@ -34,6 +41,11 @@ import java.util.UUID;
 public class ErrorAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(ErrorAnalyzer.class);
+
+    /** few-shot 历史样本注入条数（消除魔法数字）。 */
+    private static final int HISTORICAL_SAMPLE_LIMIT = 3;
+    /** 无历史样本时的占位文本（与 root-cause.st 的 historicalSamples 占位兼容）。 */
+    private static final String NO_HISTORICAL_SAMPLES = "无历史样本";
 
     private final Fingerprinter fingerprinter;
     private final EmbeddingService embeddingService;
@@ -43,6 +55,8 @@ public class ErrorAnalyzer {
     private final AnalysisTools analysisTools;
     private final AnalysisProperties properties;
     private final PromptTemplateHolder promptTemplate;
+    private final AnalysisMetrics metrics;
+    private final FewShotRepository fewShotRepository;
 
     public ErrorAnalyzer(Fingerprinter fingerprinter,
                          EmbeddingService embeddingService,
@@ -51,7 +65,9 @@ public class ErrorAnalyzer {
                          ChatClient chatClient,
                          AnalysisTools analysisTools,
                          AnalysisProperties properties,
-                         PromptTemplateHolder promptTemplate) {
+                         PromptTemplateHolder promptTemplate,
+                         AnalysisMetrics metrics,
+                         FewShotRepository fewShotRepository) {
         this.fingerprinter = fingerprinter;
         this.embeddingService = embeddingService;
         this.fingerprintCache = fingerprintCache;
@@ -60,15 +76,20 @@ public class ErrorAnalyzer {
         this.analysisTools = analysisTools;
         this.properties = properties;
         this.promptTemplate = promptTemplate;
+        this.metrics = metrics;
+        this.fewShotRepository = fewShotRepository;
     }
 
     public AnalysisResult analyze(ErrorEvent event) {
+        long start = System.nanoTime();
         ErrorFingerprint fp = fingerprinter.generate(event);
 
         // L1: 指纹精确命中缓存
         Optional<RootCauseAnalysis> cached = fingerprintCache.lookup(fp.hash());
         if (cached.isPresent()) {
             log.debug("L1 cache hit: {}", fp.hash());
+            metrics.recordPath(AnalysisPath.CACHE_HIT, event.appName());
+            metrics.recordDuration(System.nanoTime() - start, AnalysisPath.CACHE_HIT);
             return AnalysisResult.cacheHit(fp.hash(), cached.get());
         }
 
@@ -81,6 +102,8 @@ public class ErrorAnalyzer {
                 clusterRepository.save(updated);
                 fingerprintCache.put(fp.hash(), updated.analysis());
                 log.debug("L2 vector merged: {} -> cluster {}", fp.hash(), updated.clusterId());
+                metrics.recordPath(AnalysisPath.VECTOR_MERGED, event.appName());
+                metrics.recordDuration(System.nanoTime() - start, AnalysisPath.VECTOR_MERGED);
                 return AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis());
             }
         }
@@ -88,6 +111,7 @@ public class ErrorAnalyzer {
         // L3: 新簇，调 LLM 分析
         RootCauseAnalysis raw = callLlm(event, fp);
         RootCauseAnalysis analyzed = postProcess(raw);
+        metrics.recordConfidence(analyzed.confidence());
         String clusterId = "cluster-" + UUID.randomUUID();
         ErrorCluster newCluster = ErrorCluster.newOne(
             clusterId, event.appName(), event.exceptionType(),
@@ -96,10 +120,21 @@ public class ErrorAnalyzer {
         fingerprintCache.put(fp.hash(), analyzed);
         log.info("L3 llm new: {} -> cluster {} (confidence={}, review={})",
             fp.hash(), clusterId, analyzed.confidence(), analyzed.needHumanReview());
+        metrics.recordPath(AnalysisPath.LLM_NEW, event.appName());
+        metrics.recordDuration(System.nanoTime() - start, AnalysisPath.LLM_NEW);
         return AnalysisResult.llmNew(fp.hash(), clusterId, analyzed);
     }
 
     private RootCauseAnalysis callLlm(ErrorEvent event, ErrorFingerprint fp) {
+        // 横切B：注入 few-shot 历史已确认样本，提升根因准确率（数据飞轮）
+        List<FewShotSample> samples = fewShotRepository.findByExceptionType(
+            event.exceptionType(), HISTORICAL_SAMPLE_LIMIT);
+        String historicalSamples = samples.isEmpty()
+            ? NO_HISTORICAL_SAMPLES
+            : samples.stream()
+                .map(s -> "- 堆栈摘要: " + s.stackText() + "\n  正确根因: " + s.correctRootCause())
+                .collect(Collectors.joining("\n"));
+
         Map<String, Object> vars = new HashMap<>();
         vars.put("appName", event.appName());
         vars.put("env", event.env() == null ? "unknown" : event.env());
@@ -108,7 +143,7 @@ public class ErrorAnalyzer {
         vars.put("exceptionMessage", event.exceptionMessage());
         vars.put("stackFrames", String.join("\n", fp.topFrames()));
         vars.put("mdc", String.valueOf(event.mdc()));
-        vars.put("historicalSamples", "[MVP 阶段无历史样本]");
+        vars.put("historicalSamples", historicalSamples);
 
         String promptText = promptTemplate.render(vars);
         try {

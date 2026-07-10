@@ -53,6 +53,22 @@
             <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
         </dependency>
 
+        <!-- 横切A度量层：Micrometer + Prometheus（/actuator/prometheus 端点） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ①采集层 Kafka 通道（@ConditionalOnProperty + autoconfigure.exclude 控制启用） -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
         <!-- L1 指纹缓存（MVP 内存实现，生产可换 Redis） -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
