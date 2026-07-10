@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
  * L3 LLM 簇代表根因分析 -> 真正调 LLM（仅占异常总量约 1%）
  *
  * 对应 B1 设计：③分析层 + 置信度兜底（高危点 3）。
- * 横切A：埋点 AnalysisPath / 耗时 / 置信度（对应简历"40%"度量底气）。
+ * 横切A：埋点 AnalysisPath / 耗时 / 置信度（支撑"40%"度量底气）。
  * 横切B：callLlm 注入 few-shot 历史样本（数据飞轮，越用越准）。
  *
  * 注意：Spring AI ChatClient 的 .tools() / .entity() API 签名可能随版本变化，以官方文档为准。

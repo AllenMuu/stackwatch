@@ -17,10 +17,10 @@ import java.time.Duration;
  * <p>四类指标（统一 {@code stackwatch.} 前缀）：
  * <ul>
  *   <li>{@code stackwatch.analysis_duration_seconds}（Timer，tag: path）—— 定位耗时，
- *       对应简历「定位耗时缩短 40%」的度量底气：没有这层埋点，「40%」只是话术；
+ *       支撑「定位耗时缩短 40%」的度量底气：没有这层埋点，「40%」只是话术；
  *       有了 Timer + path tag，可在 Prometheus 按 path 切片算 P50/P95，量化缓存命中率对耗时的贡献。</li>
  *   <li>{@code stackwatch.analysis_path_total}（Counter，tag: path/appName）——
- *       归并路径分布 {@code path=cache_hit/vector_merged/llm_new}，对应简历
+ *       归并路径分布 {@code path=cache_hit/vector_merged/llm_new}，支撑
  *       「95% 走缓存、4% 走向量归并、仅 1% 真调 LLM」的成本故事。</li>
  *   <li>{@code stackwatch.root_cause_confidence}（DistributionSummary，Prometheus 以 histogram 桶暴露）——
  *       根因置信度分布，配合 {@code confidence-threshold=0.6} 兜底阈值观察低置信度占比。</li>
@@ -131,7 +131,7 @@ public class AnalysisMetrics {
             .increment(safeTokens);
     }
 
-    /** 枚举转 Prometheus tag 小写蛇形值，与简历话术 cache_hit/vector_merged/llm_new 对齐。 */
+    /** 枚举转 Prometheus tag 小写蛇形值，与口径 cache_hit/vector_merged/llm_new 对齐。 */
     private static String pathName(AnalysisPath path) {
         return switch (path) {
             case CACHE_HIT -> "cache_hit";

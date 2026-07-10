@@ -1,4 +1,4 @@
-# StackWatch 详细设计文档
+# StackWatch Detailed Design
 
 > AI 驱动的 Java 生产错误根因分析系统
 > 版本：0.1.0-SNAPSHOT | 最后更新：2026-07-10 | 对应 commit：01aff10
@@ -293,7 +293,7 @@ management:
 
 ## 10. 关键设计决策
 
-1. **三层归并而非纯 LLM**：成本降两个数量级，1% 异常才调 LLM（见选型分析文档）
+1. **三层归并而非纯 LLM**：成本降两个数量级，1% 异常才调 LLM（见 tech-selection.md）
 2. **指纹版本化**：算法升级不断历史归并关系（借鉴 PostHog）
 3. **Function Calling 防幻觉**：查事实而非猜根因
 4. **置信度双判兜底**：LLM 自评 + 证据校验，低置信转人工

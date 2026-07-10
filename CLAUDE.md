@@ -2,96 +2,93 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 项目简介
+## Project Overview
 
-StackWatch 是 AI 驱动的 Java 生产错误根因分析系统：异常堆栈指纹归并 + LLM 根因定位 + 定时周报聚合。核心价值是「成本阶梯」——绝大多数异常在 L1/L2 免费归并，仅约 1% 真正调用 LLM。
+StackWatch is an AI-driven root cause analysis system for Java production errors: stacktrace fingerprint merging + LLM root cause localization + scheduled weekly digest. The core value is a "cost ladder" — the vast majority of exceptions are merged for free at L1/L2; only ~1% actually call the LLM.
 
-## 构建与运行
+## Build & Run
 
-**JDK 17 是硬性要求**（Spring Boot 3.4 + Spring AI 1.0 强制）。构建前确认 `JAVA_HOME` 指向 17，否则编译失败：
+**JDK 17 is mandatory** (Spring Boot 3.4 + Spring AI 1.0 require it). The local JDK version is managed by **jenv** and can be freely switched — no need to manually `export JAVA_HOME`. Just ensure `jenv` is set to 17 for this project before building, or compilation will fail.
+
+Common commands:
 ```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+mvn clean package          # build
+mvn spring-boot:run        # run (needs DASHSCOPE_API_KEY to actually call the LLM; otherwise only L1/L2 work)
+mvn test                   # full test suite
+mvn test -Dtest=ErrorAnalyzerUnitTest          # single test class
+mvn test -Dtest=ErrorAnalyzerUnitTest#l1CacheHitSkipsLlmAndEmbedding  # single test method
 ```
 
-常用命令：
-```bash
-mvn clean package          # 构建
-mvn spring-boot:run        # 运行（需 DASHSCOPE_API_KEY 才能真正调 LLM，否则仅 L1/L2 可用）
-mvn test                   # 全量测试
-mvn test -Dtest=ErrorAnalyzerUnitTest          # 单个测试类
-mvn test -Dtest=ErrorAnalyzerUnitTest#l1CacheHitSkipsLlmAndEmbedding  # 单个测试方法
-```
+**LLM secrets go through environment variables only — never hardcode them**: `DASHSCOPE_API_KEY` (required to call the LLM), `LLM_BASE_URL`, `LLM_CHAT_MODEL`, `KAFKA_BOOTSTRAP`, `FEISHU_WEBHOOK_URL`, `FEISHU_API_URL`.
 
-**LLM 密钥走环境变量，禁止写入代码**：`DASHSCOPE_API_KEY`（必填才调 LLM）、`LLM_BASE_URL`、`LLM_CHAT_MODEL`、`KAFKA_BOOTSTRAP`、`FEISHU_WEBHOOK_URL`、`FEISHU_API_URL`。
+## Test Layering
 
-## 测试分层
+- **Pure unit tests (CI-friendly, no LLM key)**: `ErrorAnalyzerUnitTest`, `FingerprinterTest`. `ErrorAnalyzerUnitTest` uses Mockito to chain-mock `ChatClient` (prompt->user->tools->call->entity) and covers L1 hit / L2 merge / L3 new cluster / confidence fallback / LLM-exception fallback. **Tests for the core merge logic must not depend on a real LLM.**
+- **Integration test (needs key)**: `ErrorAnalyzerTest` is guarded by `@EnabledIfEnvironmentVariable(named = "DASHSCOPE_API_KEY", matches = "sk-.+")` and auto-skips when unconfigured.
 
-- **纯单元测试（CI 友好，无需 LLM Key）**：`ErrorAnalyzerUnitTest`、`FingerprinterTest`。`ErrorAnalyzerUnitTest` 用 Mockito 链式 mock `ChatClient`（prompt→user→tools→call→entity），覆盖 L1 命中 / L2 归并 / L3 新簇 / 置信度兜底 / LLM 异常兜底。**核心归并逻辑的测试不应依赖真实 LLM。**
-- **集成测试（需 Key）**：`ErrorAnalyzerTest` 用 `@EnabledIfEnvironmentVariable(named = "DASHSCOPE_API_KEY", matches = "sk-.+")` 守卫，未配置时自动跳过。
+## Architecture (what requires reading multiple files)
 
-## 架构（需跨多文件理解的部分）
-
-### 五层主链路 + 两层横切
+### Five-layer main pipeline + two cross-cutting layers
 
 ```
-①采集层 collector    -> 三入口：Logback Appender / HTTP /collect / Kafka（默认关）
-②预处理层 preprocess -> 指纹去重（SHA-256 + 框架帧过滤）
-③分析层 analyzer     -> L1 指纹缓存 / L2 向量归并 / L3 LLM 三层级联（核心）
-④聚合层 aggregator   -> 实时激增检测 + 按周 Top-N 聚合
-⑤投递层 notifier     -> 飞书实时告警 + 飞书周报
-横切A metrics        -> Micrometer 埋点（path 耗时/置信度/token 成本）
-横切B feedback       -> /feedback 回流 few-shot，下次分析注入 prompt（数据飞轮）
+① Collector    -> three entry points: Logback Appender / HTTP /collect / Kafka (off by default)
+② Preprocess   -> fingerprint dedup (SHA-256 + framework-frame filtering)
+③ Analyzer     -> L1 fingerprint cache / L2 vector merge / L3 LLM three-tier cascade (core)
+④ Aggregator   -> real-time surge detection + weekly Top-N aggregation
+⑤ Notifier     -> Feishu real-time alert + Feishu weekly report
+Cross-cutting A: metrics  -> Micrometer instrumentation (path latency / confidence / token cost)
+Cross-cutting B: feedback -> /feedback flows few-shot back, injected into the next prompt (data flywheel)
 ```
 
-数据流：`ErrorEventCollector`（采集）→ `Fingerprinter.generate`（预处理）→ `ErrorAnalyzer.analyze`（L1→L2→L3）→ 簇落 `ClusterRepository` → `WeeklyAggregator`/`HighFrequencyDetector`（聚合）→ `FeishuClient`（投递）。
+Data flow: `ErrorEventCollector` (collect) -> `Fingerprinter.generate` (preprocess) -> `ErrorAnalyzer.analyze` (L1->L2->L3) -> cluster lands in `ClusterRepository` -> `WeeklyAggregator`/`HighFrequencyDetector` (aggregate) -> `FeishuClient` (deliver).
 
-### 三层级联归并（`ErrorAnalyzer.analyze` 是架构中枢）
+### Three-tier cascade merge (`ErrorAnalyzer.analyze` is the architectural hub)
 
-- **L1** `FingerprintCache`（Caffeine）：指纹 hash 精确命中 → 复用历史 `RootCauseAnalysis`，0 token。
-- **L2** `ClusterRepository.findSimilar`：向量相似归并到已有簇，0 token。`embedding == null` 时跳过（L2 关闭的信号）。
-- **L3** `callLlm`：新簇调 ChatClient，`.entity(RootCauseAnalysis.class)` 做结构化输出 + `.tools(analysisTools)` 注入 `@Tool` 函数防幻觉；`postProcess` 做置信度兜底（confidence < 阈值 **或** evidence 为空 → `needHumanReview=true`；LLM 异常 → 兜底 UNKNOWN 根因）。
+- **L1** `FingerprintCache` (Caffeine): exact fingerprint-hash hit -> reuse historical `RootCauseAnalysis`, 0 tokens.
+- **L2** `ClusterRepository.findSimilar`: vector similarity merges into an existing cluster, 0 tokens. Skipped when `embedding == null` (the signal that L2 is off).
+- **L3** `callLlm`: new cluster calls ChatClient, `.entity(RootCauseAnalysis.class)` for structured output + `.tools(analysisTools)` injects `@Tool` functions to prevent hallucination; `postProcess` applies confidence fallback (confidence < threshold **or** evidence empty -> `needHumanReview=true`; LLM exception -> fallback UNKNOWN root cause).
 
-### 零基础设施启动 = 特性开关 + 自动装配排除
+### Zero-infrastructure startup = feature flag + autoconfigure exclusion
 
-项目默认**不连 DB / 不连 Kafka / 不连向量库**即可启动，靠两处协同控制：
+The project starts with **no DB / no Kafka / no vector store** by default, controlled by two coordinated mechanisms:
 
-1. `application.yml` 的 `spring.autoconfigure.exclude` 列表（`DataSourceAutoConfiguration` / `PgVectorStoreAutoConfiguration` / `KafkaAutoConfiguration`）—— 这是总开关。
-2. 各仓储/通道用 `@ConditionalOnProperty` 选择实现。
+1. The `spring.autoconfigure.exclude` list in `application.yml` (`DataSourceAutoConfiguration` / `PgVectorStoreAutoConfiguration` / `KafkaAutoConfiguration`) — this is the master switch.
+2. Each repository/channel selects its implementation via `@ConditionalOnProperty`.
 
-**启用 L2（PgVector）或 Kafka 时必须三处同步改**（缺一即启动失败或 bean 注入失败），步骤见 `VectorStoreConfig` 与 `KafkaCollectConfig` 的 Javadoc：
-- pom.xml 取消对应 starter 注释 / 确认依赖在 classpath；
-- 从 `spring.autoconfigure.exclude` 移除对应 AutoConfiguration；
-- 配置 `spring.datasource`（L2）或 `spring.kafka.bootstrap-servers`（Kafka）；
-- 把 `stackwatch.l2.enabled` / `stackwatch.collector.kafka.enabled` 置 `true`。
+**Enabling L2 (PgVector) or Kafka requires synchronized changes in three places** (missing any one causes startup or bean-injection failure); see the Javadoc on `VectorStoreConfig` and `KafkaCollectConfig`:
+- pom.xml: uncomment the relevant starter / ensure the dependency is on the classpath;
+- remove the corresponding AutoConfiguration from `spring.autoconfigure.exclude`;
+- configure `spring.datasource` (L2) or `spring.kafka.bootstrap-servers` (Kafka);
+- set `stackwatch.l2.enabled` / `stackwatch.collector.kafka.enabled` to `true`.
 
-`ClusterRepository` 有两个互斥实现，由 `stackwatch.l2.enabled` 选择：`InMemoryClusterRepository`（`havingValue=false, matchIfMissing=true`，`findSimilar` 恒返回 empty 强制走 L3）vs `PgVectorClusterRepository`（`havingValue=true`）。
+`ClusterRepository` has two mutually exclusive implementations selected by `stackwatch.l2.enabled`: `InMemoryClusterRepository` (`havingValue=false, matchIfMissing=true`; `findSimilar` always returns empty, forcing L3) vs `PgVectorClusterRepository` (`havingValue=true`).
 
-> 注意：即使 L2 启用，`PgVectorClusterRepository.findSimilar` 当前仍用**内存余弦相似度**比对簇 embedding，而非 `VectorStore.similaritySearch`——因为 Spring AI 1.0.0 的 `SearchRequest.query()` 只接受 `String` 不接受 `float[]`（源码核实，见该类 Javadoc）。改这块前先确认 Spring AI 版本是否已支持向量入参。
+> Note: even when L2 is enabled, `PgVectorClusterRepository.findSimilar` currently still uses **in-memory cosine similarity** over cluster embeddings rather than `VectorStore.similaritySearch` — because Spring AI 1.0.0's `SearchRequest.query()` accepts only `String`, not `float[]` (verified against source; see that class's Javadoc). Confirm whether your Spring AI version supports vector input before changing this.
 
-### 三种采集入口
+### Three collection entry points
 
-- `/analyze`（`AnalysisController`）：直接调 `ErrorAnalyzer`，调用方自组字段。
-- `/collect`（`CollectController`）：走 `ErrorEventCollector`，由采集层补 `eventId`/`occurredAt`，是对外上报标准入口。
-- `LogbackErrorAppender`：Logback 反射实例化（非 Spring bean），通过内部静态 `SpringContextHolder`（`ApplicationContextAware`）取 `ErrorEventCollector`；带 `ThreadLocal` 递归保护，采集异常吞掉写 stderr 避免自递归。
-- Kafka（`KafkaErrorProducer`/`KafkaErrorConsumer`）：默认关，启用后异步削峰。
+- `/analyze` (`AnalysisController`): calls `ErrorAnalyzer` directly; caller assembles the fields itself.
+- `/collect` (`CollectController`): goes through `ErrorEventCollector`, which fills in `eventId`/`occurredAt`; the standard external reporting entry point.
+- `LogbackErrorAppender`: instantiated by Logback via reflection (not a Spring bean), obtains `ErrorEventCollector` through the nested static `SpringContextHolder` (`ApplicationContextAware`); carries a `ThreadLocal` recursion guard and swallows collection exceptions to stderr to avoid self-recursion.
+- Kafka (`KafkaErrorProducer`/`KafkaErrorConsumer`): off by default; async peak-shaving when enabled.
 
-### 指纹算法（`Fingerprinter`）
+### Fingerprint algorithm (`Fingerprinter`)
 
-输入 = `exceptionType` + 规范化 top-N **应用帧**（过滤 `java./javax./org.springframework./io.netty.` 等框架前缀，因框架内部栈帧随依赖版本抖动而业务帧稳定）。应用帧不足 2 帧时回退栈顶 N 帧。`buildEmbeddingText` 供 L2 embedding 用，渲染策略由 `EmbeddingRendering` 记录（借鉴 PostHog）。指纹版本化（`FingerprintVersion`）以便算法升级不断历史归并关系。
+Input = `exceptionType` + normalized top-N **application frames** (filters out framework prefixes like `java./javax./org.springframework./io.netty.`, because framework-internal frames jitter with dependency versions while business frames stay stable). Falls back to the top-N raw frames when fewer than 2 application frames are present. `buildEmbeddingText` feeds L2 embeddings, with the rendering strategy recorded by `EmbeddingRendering` (inspired by PostHog). Fingerprints are versioned (`FingerprintVersion`) so algorithm upgrades don't break historical merge relationships.
 
-### 度量埋点（`AnalysisMetrics`）
+### Metrics instrumentation (`AnalysisMetrics`)
 
-统一 `stackwatch.` 前缀，关键 tag `path=cache_hit|vector_merged|llm_new`：`analysis_duration_seconds`（Timer，P50/P95 量化缓存对耗时贡献）、`analysis_path_total`（Counter，成本故事 95%/4%/1%）、`root_cause_confidence`（DistributionSummary）、`token_cost_total`（占位 0，待接 ChatResponse usage）。埋点由 `ErrorAnalyzer` 在 L1/L2/L3 三处 return 前调用。
+Unified `stackwatch.` prefix; the key tag is `path=cache_hit|vector_merged|llm_new`: `analysis_duration_seconds` (Timer; P50/P95 quantify the cache's contribution to latency), `analysis_path_total` (Counter; the 95%/4%/1% cost story), `root_cause_confidence` (DistributionSummary), `token_cost_total` (placeholder 0, pending ChatResponse usage wiring). Instrumentation is called by `ErrorAnalyzer` right before each L1/L2/L3 return.
 
-### 周报调度（`WeeklyReportScheduler`）
+### Weekly report scheduling (`WeeklyReportScheduler`)
 
-`@Scheduled(cron = "0 0 9 * * MON")` 周一 9:00 Asia/Shanghai：`WeeklyAggregator.aggregateWeekly` 取 Top-N 簇 → ChatClient 总结 → `FeishuClient.sendWebhook`。LLM 失败回退原始数据文本，保证周报不缺失。`@EnableScheduling` 在 `StackWatchConfig` 上。`ReportController` 提供手动触发复用入口。
+`@Scheduled(cron = "0 0 9 * * MON")` — Monday 9:00 Asia/Shanghai: `WeeklyAggregator.aggregateWeekly` fetches Top-N clusters -> ChatClient summarizes -> `FeishuClient.sendWebhook`. On LLM failure it falls back to a raw-data text so the report is never missing. `@EnableScheduling` lives on `StackWatchConfig`. `ReportController` exposes a manual-trigger entry point that reuses this flow.
 
-## 关键约定
+## Key Conventions
 
-- **不可变**：`domain` 全部 record，集合字段在 compact constructor 做 `List.copyOf`/`Map.copyOf`；`ErrorCluster.embedding`（`float[]`）做 clone 双重防御。归并时通过 `ErrorCluster.increment` 返回新实例，绝不原地改。
-- **配置**：所有 `stackwatch.*` 配置用 record `@ConfigurationProperties`，compact constructor 内做范围校验并回退默认值（如 `AnalysisProperties`、`CacheProperties`）。前缀分布：`stackwatch.analysis` / `stackwatch.cache` / `stackwatch.l2` / `stackwatch.collector.kafka` / `stackwatch.feishu`。
-- **Prompt 模板**：`resources/prompts/root-cause.st` + `PromptTemplateHolder` 自行做 `{var}` 替换，**不用 Spring AI template API**（版本敏感）。新增变量需同步改模板与 `ErrorAnalyzer.callLlm` 的 vars map。
-- **错误处理**：采集/投递/embedding 失败均不阻断主链路，显式 `log.warn` 后降级（embedding 失败→null→跳 L2；LLM 失败→兜底根因；飞书失败→跳过推送）。
-- **Spring AI API 版本敏感**：`ChatClient` 的 `.tools()` / `.entity()` / `.content()` 签名可能随版本变化，相关类 Javadoc 已注明「以官方文档为准」。改这些调用前先核对 Spring AI 1.0.0 实际签名。
-- **依赖按需解锁**：pom.xml 中 `resilience4j`、`spring-boot-starter-data-redis` 等以注释形式存在，需用时取消注释（版本由 Spring Boot parent 管理，无需显式写 version）。
+- **Immutability**: all `domain` records; collection fields are `List.copyOf`/`Map.copyOf`'d in the compact constructor; `ErrorCluster.embedding` (`float[]`) is cloned defensively (both on construct and access). Merging produces a new instance via `ErrorCluster.increment` — never mutated in place.
+- **Configuration**: all `stackwatch.*` config uses record `@ConfigurationProperties` with range validation and default fallback inside the compact constructor (e.g. `AnalysisProperties`, `CacheProperties`). Prefixes: `stackwatch.analysis` / `stackwatch.cache` / `stackwatch.l2` / `stackwatch.collector.kafka` / `stackwatch.feishu`.
+- **Prompt template**: `resources/prompts/root-cause.st` + `PromptTemplateHolder` does its own `{var}` replacement — **does not use the Spring AI template API** (version-sensitive). Adding a variable requires updating both the template and the vars map in `ErrorAnalyzer.callLlm`.
+- **Error handling**: collection / delivery / embedding failures never block the main pipeline — they `log.warn` and degrade (embedding failure -> null -> skip L2; LLM failure -> fallback root cause; Feishu failure -> skip push).
+- **Spring AI API is version-sensitive**: `ChatClient`'s `.tools()` / `.entity()` / `.content()` signatures may change across versions; relevant class Javadocs note "refer to official docs". Verify against the actual Spring AI 1.0.0 signatures before changing these calls.
+- **Dependencies unlocked on demand**: `resilience4j`, `spring-boot-starter-data-redis`, etc. exist as comments in pom.xml; uncomment when needed (versions are managed by the Spring Boot parent, no explicit version required).

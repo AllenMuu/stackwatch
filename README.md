@@ -1,100 +1,91 @@
+
 # StackWatch
 
-> AI 驱动的 Java 生产错误根因分析：异常堆栈指纹归并 + LLM 根因定位 + 定时周报聚合。
+> AI-driven root cause analysis for Java production errors: stacktrace fingerprint merging + LLM root cause localization + scheduled weekly digest.
 
-将生产异常堆栈自动投喂 LLM 进行根因定位与分类归并，结合定时任务按周聚合高频错误并推送飞书周报。目标：生产故障平均定位耗时缩短约 40%，高频问题发现周期由天级缩短至小时级。
+StackWatch feeds production exception stack traces to an LLM for root cause localization and categorical merging, then aggregates high-frequency errors on a weekly schedule and pushes a Feishu weekly report. Goals: cut mean time to localize production incidents by ~40%, and shorten the high-frequency-issue discovery window from days to hours.
 
-## 文档
+## Documentation
 
-| 文档 | 内容 |
-|------|------|
-| [详细设计](docs/详细设计.md) | 架构详设、模块设计、核心流程、数据结构、表结构、接口、配置 |
-| [选型分析](docs/选型分析.md) | 每个技术选型的备选方案、对比维度、决策与理由 |
-| [升级路径](docs/升级路径.md) | 当前状态、后续演进路线（V1.x → V3.x）、优先级建议 |
-| [面试准备](docs/面试准备-架构卖点与选型.md) | 8 卖点、14 选型问答、简历措辞打磨、高危追问应对 |
+| Doc | Contents |
+|-----|----------|
+| [Detailed Design](docs/detailed-design.md) | Architecture, module design, core flows, data structures, schema, APIs, config |
+| [Tech Selection](docs/tech-selection.md) | Alternatives, comparison criteria, and rationale for each tech choice |
+| [Upgrade Path](docs/upgrade-path.md) | Current status, roadmap (V1.x -> V3.x), prioritization advice |
 
-## 架构总览
+## Architecture Overview
 
-五层主链路 + 两层横切：
-
-```
-① 采集层 Collector       -> Kafka（MVP：内存队列）
-② 预处理层 Preprocessor  -> 指纹去重 + 采样
-③ 分析层 Analyzer        -> L1 指纹 / L2 向量 / L3 LLM 三层级联（核心）
-④ 聚合层 Aggregator      -> 实时激增检测 + 按周聚合
-⑤ 投递层 Notifier        -> 飞书实时告警 + 飞书周报
-
-横切 A: 度量层 Metrics   -> 定位耗时 / 准确率 / token 成本
-横切 B: 反馈层 Feedback  -> 研发反馈回流 few-shot，越用越准
-```
-
-### 分析层三层归并（核心）
+A five-layer main pipeline plus two cross-cutting layers:
 
 ```
-L1 指纹精确命中缓存   -> 0 token
-L2 向量近似归并       -> 0 token
-L3 LLM 簇代表根因分析 -> 真正调 LLM（仅占异常总量约 1%）
+① Collector       -> Kafka (MVP: in-memory queue)
+② Preprocessor    -> fingerprint dedup + sampling
+③ Analyzer        -> L1 fingerprint / L2 vector / L3 LLM three-tier cascade (core)
+④ Aggregator      -> real-time surge detection + weekly aggregation
+⑤ Notifier        -> Feishu real-time alert + Feishu weekly report
+
+Cross-cutting A: Metrics   -> localization latency / accuracy / token cost
+Cross-cutting B: Feedback  -> dev feedback flows back as few-shot; gets smarter with use
 ```
 
-成本阶梯：L1 ≈ 0 -> L2 ≈ 0 -> L3 才花钱。
+### Three-tier merge in the Analyzer (core)
 
-## 环境要求
+```
+L1 exact fingerprint cache hit   -> 0 tokens
+L2 approximate vector merge      -> 0 tokens
+L3 LLM root cause on cluster rep -> actually calls the LLM (~1% of exceptions only)
+```
 
-- **JDK 17+**（Spring Boot 3.4 + Spring AI 1.0 强制要求，不支持 Java 8/11）
+Cost ladder: L1 ≈ 0 -> L2 ≈ 0 -> L3 is the only step that costs money.
+
+## Requirements
+
+- **JDK 17+** (required by Spring Boot 3.4 + Spring AI 1.0; Java 8/11 are not supported)
 - Maven 3.6+
 
-若 `mvn -v` 显示的 Java 版本非 17，构建与运行前需切换：
+## Quick Start
 
 ```bash
-# macOS 查看已安装 JDK
-/usr/libexec/java_home -V
-# 指定 JDK 17（建议写入 ~/.zshrc 持久化）
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-```
-
-## 快速开始
-
-```bash
-# 1. 配置 LLM API Key（走环境变量，禁止写入代码）
+# 1. Configure the LLM API key via env var (never hardcode it)
 export DASHSCOPE_API_KEY=sk-...
 
-# 2. 构建
+# 2. Build
 mvn clean package
 
-# 3. 运行
+# 3. Run
 mvn spring-boot:run
 
-# 4. 试用：输入异常堆栈，获取 LLM 根因
+# 4. Try it: feed an exception stack trace and get an LLM root cause
 curl -X POST http://localhost:8080/analyze \
   -H "Content-Type: application/json" \
   -d '{"appName":"order-service","exceptionType":"NullPointerException","exceptionMessage":"Cannot invoke method on null","stackTrace":["com.foo.OrderService.process(OrderService.java:42)","com.foo.OrderController.handle(OrderController.java:17)"]}'
 ```
 
-## 当前状态（MVP）
+## Current Status (MVP)
 
-- ✅ domain 数据结构（不可变 record）
-- ✅ ② 预处理层：指纹生成（SHA-256 + 框架帧过滤 + 版本化 + 可解释记录）
-- ✅ ③ 分析层：L1 缓存（Caffeine）+ L3 LLM 根因（Spring AI 结构化输出 + Function Calling）
-- 🚧 L2 向量归并：接口已定义，待接入 PgVector
-- 🚧 ① 采集层：待接入 Kafka / Logback Appender
-- 🚧 ④ ⑤ 聚合层 / 投递层：待实现飞书周报
-- 🚧 横切 A/B：待接入 Micrometer + 反馈闭环
+- ✅ Domain data structures (immutable records)
+- ✅ ② Preprocessor: fingerprint generation (SHA-256 + framework-frame filtering + versioning + explainable records)
+- ✅ ③ Analyzer: L1 cache (Caffeine) + L3 LLM root cause (Spring AI structured output + Function Calling)
+- 🚧 L2 vector merge: interface defined, pending PgVector integration
+- 🚧 ① Collector: pending Kafka / Logback Appender integration
+- 🚧 ④ ⑤ Aggregator / Notifier: pending Feishu weekly report implementation
+- 🚧 Cross-cutting A/B: pending Micrometer + feedback loop integration
 
-## 技术栈
+## Tech Stack
 
 - Spring Boot 3.4 + Java 17
-- Spring AI 1.0（OpenAI 兼容协议，DashScope/DeepSeek 可切换）
-- Caffeine（L1 缓存）
-- PgVector（L2 向量，待接入）
+- Spring AI 1.0 (OpenAI-compatible protocol; switchable between DashScope/DeepSeek)
+- Caffeine (L1 cache)
+- PgVector (L2 vectors, pending integration)
 
-## 开源致谢
+## Acknowledgments
 
-本项目借鉴了以下优秀开源项目的设计思想：
+This project draws design inspiration from the following open-source projects:
 
-- **PostHog** error_tracking：指纹算法版本化、embedding rendering 元数据、周报结构
-- **Arvo-AI/aurora**：RCA 后动作自动化、知识库积累思想
-- **salesforce/PyRCA**：RCA 评估方法论
+- **PostHog** error_tracking: fingerprint algorithm versioning, embedding rendering metadata, weekly report structure
+- **Arvo-AI/aurora**: post-RCA action automation, knowledge-base accumulation
+- **salesforce/PyRCA**: RCA evaluation methodology
 
-## 许可证
+## License
 
 MIT

@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * 分析请求 DTO（不可变）。
- * 对应简历接口：POST /analyze，输入异常信息，输出 LLM 根因。
+ * 对外接口：POST /analyze，输入异常信息，输出 LLM 根因。
  */
 public record AnalyzeRequest(
     String appName,

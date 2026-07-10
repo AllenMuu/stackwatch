@@ -1,4 +1,4 @@
-# StackWatch 升级路径
+# StackWatch Upgrade Path
 
 > 当前状态、已完成能力、后续演进路线
 > 原则：**渐进式增强**，每一步都可独立交付价值，不破坏已跑通的链路
@@ -56,7 +56,7 @@ metrics.recordTokens(tokens);
 return parseRootCause(response.getResult().getOutput().getText());
 ```
 
-**价值**：token 成本可观测，简历"成本降两个数量级"有真实数据支撑。
+**价值**：token 成本可观测，"成本降两个数量级"有真实数据支撑。
 
 ---
 
@@ -69,7 +69,7 @@ return parseRootCause(response.getResult().getOutput().getText());
 2. 从 `spring.autoconfigure.exclude` 移除 `DataSourceAutoConfiguration` + `PgVectorStoreAutoConfiguration`
 3. 配置 `spring.datasource`（PostgreSQL + `CREATE EXTENSION vector`）
 4. 取消注释 `spring.ai.openai.embedding`（EmbeddingModel bean 创建）
-5. 建表（见详细设计文档第 6 节）
+5. 建表（见 detailed-design.md 第 6 节）
 
 **待 Spring AI 支持 float[] query 后**：`PgVectorClusterRepository.findSimilar` 从内存余弦切换为 `SearchRequest.builder().query(embedding).topK(1).similarityThreshold(threshold)`。
 
@@ -101,7 +101,7 @@ return parseRootCause(response.getResult().getOutput().getText());
 - 配 API Key 跑 `ErrorAnalyzerTest`，验证真实 LLM 根因质量
 - 补"指纹归并质量评估"测试（见 V2.1）
 
-**价值**：眼见为实，面试演示可用。
+**价值**：眼见为实，可作端到端演示。
 
 ---
 
@@ -146,7 +146,7 @@ return parseRootCause(response.getResult().getOutput().getText());
 - 置信度 < 0.6 的，再用 Qwen-Plus（强模型）精分
 - 缓存：相似堆栈命中缓存不调模型
 
-**价值**：token 成本再降一层，简历"成本优化"更深。
+**价值**：token 成本再降一层，"成本优化"更深。
 
 ---
 
@@ -189,11 +189,11 @@ return parseRootCause(response.getResult().getOutput().getText());
 
 ## 4. 优先级建议
 
-| 版本 | 工作量 | 面试价值 | 建议顺序 |
+| 版本 | 工作量 | 演示价值 | 建议顺序 |
 |------|--------|---------|---------|
 | V1.4 集成测试 | 小 | 高（眼见为实） | 1 |
 | V1.1 token 接入 | 小 | 高（数据底气） | 2 |
-| V2.1 指纹 V2 + F1 评估 | 中 | 极高（扛追问） | 3 |
+| V2.1 指纹 V2 + F1 评估 | 中 | 极高（经得起检验） | 3 |
 | V1.2 L2 真实启用 | 中 | 高（端到端） | 4 |
 | V3.1 多模型级联 | 中 | 高（成本故事） | 5 |
 | V2.2 飞轮真实存储 | 中 | 中 | 6 |
@@ -201,4 +201,4 @@ return parseRootCause(response.getResult().getOutput().getText());
 | V1.3 Kafka 启用 | 小 | 中 | 8 |
 | V3.3 告警降噪 | 小 | 低 | 9 |
 
-**面试导向建议**：先做 V1.4 + V1.1（快速验证 + 数据底气），再 V2.1（指纹评估是面试大杀器），最后 V1.2（L2 端到端）。
+**优先级建议**：先做 V1.4 + V1.1（快速验证 + 数据底气），再 V2.1（指纹评估是核心亮点），最后 V1.2（L2 端到端）。
