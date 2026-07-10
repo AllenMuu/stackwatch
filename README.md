@@ -62,7 +62,6 @@ The Analyzer is the hub of the system. Most exceptions are resolved for free at 
 - **JDK 17+** — required by Spring Boot 3.4 + Spring AI 1.0 (Java 8/11 not supported)
 - **Maven 3.6+**
 
-> Tip: manage multiple JDKs with [jenv](https://www.jenv.be/) and set this project to 17.
 
 ## Quick Start
 

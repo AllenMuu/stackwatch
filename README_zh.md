@@ -62,8 +62,6 @@ flowchart TD
 - **JDK 17+** - Spring Boot 3.4 + Spring AI 1.0 强制要求（不支持 Java 8/11）
 - **Maven 3.6+**
 
-> 提示：本地多版本 JDK 建议用 [jenv](https://www.jenv.be/) 管理，并将本项目切到 17。
-
 ## 快速开始
 
 ```bash
