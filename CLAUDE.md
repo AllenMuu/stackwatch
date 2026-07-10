@@ -99,16 +99,20 @@ Unified `stackwatch.` prefix; the key tag is `path=cache_hit|vector_merged|llm_n
 
 ## Workflow routing (read on session start)
 
-This repo uses [`superpowers-bridge`](https://github.com/JiangWay/openspec-schemas/tree/main/superpowers-bridge) to bridge OpenSpec and Superpowers. Integration rules (language, artifact paths, PRECHECK) follow that bridge's README; this section is the routing guidance for Claude.
+This repo uses [`superpowers-bridge`](https://github.com/JiangWay/openspec-schemas/tree/main/superpowers-bridge) as the **default** workflow schema, integrating OpenSpec (what to do) with Superpowers (how to do it: brainstorming, writing-plans, git-worktrees, subagent-driven-development, TDD, code-review). Integration rules (language, artifact paths, PRECHECK) follow that bridge's README; this section is the routing guidance for Claude.
+
+**Default schema = `superpowers-bridge`** (set in `openspec/config.yaml`). `/opsx:propose` therefore runs the full aggregated flow by default: `brainstorm -> proposal -> design -> specs -> tasks -> plan -> [apply] -> verify -> retrospective`. For lighter changes pass `--schema spec-driven` to `openspec new change`. Trivial fixes skip opsx entirely (direct PR).
 
 ### Entry routing
 
 | Trigger you observe | What to do |
 |---|---|
 | User starts a narrative "design discussion / let's brainstorm" | Run verbal `superpowers:brainstorming`, but **do NOT** write to `docs/superpowers/specs/`. Once the conversation converges per the 5 criteria below, promote to `/opsx:propose` |
-| User invokes `/opsx:new` / `/opsx:ff` / `/opsx:propose` directly | Follow the schema's flow; artifact instructions inject at each step |
+| User invokes `/opsx:propose` directly | Follow the schema's flow; artifact instructions inject at each step (default schema = superpowers-bridge) |
 | User explicitly says bug fix / typo / config tweak / doc update | Direct PR — **do NOT** open a change (see skip rules below) |
-| User is mid-change | Advance with `/opsx:continue`, `/opsx:apply`, `/opsx:verify`, or `/opsx:archive` |
+| User is mid-change | Advance with `/opsx:apply` (worktree + subagent-driven-development) or `/opsx:archive`; use `/opsx:explore` to inspect, `/opsx:sync` to merge specs into main |
+
+> v1.5.0 command set: `propose / apply / archive / explore / sync`. There is no `/opsx:new` / `/opsx:ff` / `/opsx:continue` / `/opsx:verify` in this version.
 
 ### When NOT to use opsx (direct PR)
 
