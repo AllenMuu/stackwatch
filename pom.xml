@@ -73,8 +73,8 @@
 
         <!-- ①采集层 Kafka 通道（@ConditionalOnProperty + autoconfigure.exclude 控制启用） -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
-            <artifactId>spring-kafka</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
         <!-- L1 指纹缓存（MVP 内存实现，生产可换 Redis） -->
