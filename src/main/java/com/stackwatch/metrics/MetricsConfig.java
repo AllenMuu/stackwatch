@@ -15,10 +15,11 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>对应架构层：横切A度量层。
  *
- * <p>依赖前提：{@code MeterRegistryCustomizer} 位于 spring-boot-micrometer-metrics(Spring Boot 4.1 起从 spring-boot-actuator-autoconfigure 迁移至此)，
- * {@link MeterRegistry} bean 与 {@code /actuator/prometheus} 端点由 spring-boot-starter-actuator
- * 自动装配；micrometer-registry-prometheus 提供 {@code PrometheusMeterRegistry}。
- * 故 pom 需同时引入 spring-boot-starter-actuator 与 micrometer-registry-prometheus。
+ * <p>依赖前提：{@code MeterRegistryCustomizer} 位于 spring-boot-micrometer-metrics（Spring Boot 4.1 起从 spring-boot-actuator-autoconfigure 迁移至此），
+ * {@link MeterRegistry} bean 由 spring-boot-micrometer-metrics 自动装配；
+ * {@code /actuator/prometheus} 端点仍由 spring-boot-starter-actuator 提供；
+ * micrometer-registry-prometheus 提供 {@code PrometheusMeterRegistry}。
+ * 故 pom 需同时引入 spring-boot-micrometer-metrics 与 micrometer-registry-prometheus（actuator 端点按需引入）。
  */
 @Configuration
 public class MetricsConfig {

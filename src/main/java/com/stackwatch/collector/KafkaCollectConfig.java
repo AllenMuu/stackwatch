@@ -9,8 +9,11 @@ import org.springframework.context.annotation.Configuration;
  * <p>仅在 {@code stackwatch.collector.kafka.enabled=true} 时激活。
  * 激活前置（由主代理在 pom.xml / application.yml 落地）：
  * <ul>
- *   <li>pom.xml 引入 {@code org.springframework.kafka:spring-kafka}
- *       （Spring Boot 3.4 parent 已管理版本，无需显式 version）。</li>
+ *   <li>pom.xml 引入 {@code org.springframework.boot:spring-boot-starter-kafka}
+ *       （Spring Boot 4.1 parent 已管理版本，无需显式 version；
+ *        Spring Boot 4.1 中 Kafka 自动配置模块已迁移到 {@code spring-boot-kafka}，
+ *        仅引入 {@code spring-kafka} 核心库不会把 {@code KafkaAutoConfiguration} 带到类路径，
+ *        必须使用 starter 才能装配 {@link org.springframework.kafka.core.KafkaTemplate}）。</li>
  *   <li>{@code spring.autoconfigure.exclude} 移除
  *       {@code org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration}，
  *       否则 {@link org.springframework.kafka.core.KafkaTemplate} bean 不会被装配，

@@ -31,10 +31,11 @@ import java.time.Duration;
  * <p>对应架构层：横切A度量层。埋点位置由 {@link com.stackwatch.analyzer.ErrorAnalyzer}
  * 在 L1/L2/L3 三处 return 前调用（精确改法见本次返回的 {@code existingFileChanges}）。
  *
- * <p>实现说明：micrometer 1.14.x（Spring Boot 3.4.0 引入版本）无独立 Histogram 顶层计量类型，
+ * <p>实现说明：micrometer 1.15.x（Spring Boot 4.1 引入版本）无独立 Histogram 顶层计量类型，
  * 置信度分布使用 {@link DistributionSummary}——Prometheus 仍以 {@code _bucket/_count/_sum}
- * 暴露，语义等价直方图。{@link MeterRegistry} bean 与 /prometheus 端点由 spring-boot-starter-actuator
- * 自动装配，PrometheusMeterRegistry 由 micrometer-registry-prometheus 提供。
+ * 暴露，语义等价直方图。{@link MeterRegistry} bean 由 spring-boot-micrometer-metrics 自动装配，
+ * /prometheus 端点仍由 spring-boot-starter-actuator 提供；
+ * PrometheusMeterRegistry 由 micrometer-registry-prometheus 提供。
  */
 @Component
 public class AnalysisMetrics {
