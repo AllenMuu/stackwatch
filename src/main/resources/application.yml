@@ -8,9 +8,9 @@ spring:
     # - KafkaAutoConfiguration：①采集层 Kafka（stackwatch.collector.kafka.enabled=false）
     # 启用对应模块时从 exclude 列表移除相关项 + 配置对应依赖
     exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
       - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
-      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      - org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration
 
   kafka:
     # Kafka broker 占位；Kafka 关闭时此配置不生效（KafkaAutoConfiguration 已被 exclude）

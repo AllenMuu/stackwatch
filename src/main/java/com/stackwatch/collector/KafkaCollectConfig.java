@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
  *   <li>pom.xml 引入 {@code org.springframework.kafka:spring-kafka}
  *       （Spring Boot 3.4 parent 已管理版本，无需显式 version）。</li>
  *   <li>{@code spring.autoconfigure.exclude} 移除
- *       {@code org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration}，
+ *       {@code org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration}，
  *       否则 {@link org.springframework.kafka.core.KafkaTemplate} bean 不会被装配，
  *       {@link KafkaErrorProducer} 启动期注入失败。</li>
  *   <li>{@code spring.kafka.bootstrap-servers} 指向可用 broker。</li>
