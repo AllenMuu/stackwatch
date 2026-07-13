@@ -29,9 +29,6 @@ public class InMemoryFewShotRepository implements FewShotRepository {
     /** limit 入参非法（<=0）时的回退上限，与 prompt few-shot 注入条数对齐。 */
     private static final int DEFAULT_LIMIT_FALLBACK = 3;
 
-    /** exceptionType 为 null 时的分桶键，避免 NPE 且保证可召回。 */
-    private static final String UNKNOWN_BUCKET_KEY = "UNKNOWN";
-
     private final Map<String, List<FewShotSample>> storeByExceptionType = new ConcurrentHashMap<>();
 
     @Override
@@ -39,7 +36,8 @@ public class InMemoryFewShotRepository implements FewShotRepository {
         if (sample == null) {
             return;
         }
-        String key = normalizeKey(sample.exceptionType());
+        // FewShotSample 紧凑构造已把 null exceptionType 归一为 "UNKNOWN"，此处直接用作分桶键
+        String key = sample.exceptionType();
         List<FewShotSample> bucket = storeByExceptionType.computeIfAbsent(
             key, k -> java.util.Collections.synchronizedList(new ArrayList<>()));
         bucket.add(sample);
@@ -63,9 +61,5 @@ public class InMemoryFewShotRepository implements FewShotRepository {
             .sorted(Comparator.comparing(FewShotSample::createdAt).reversed())
             .limit(safeLimit)
             .toList();
-    }
-
-    private String normalizeKey(String exceptionType) {
-        return exceptionType == null ? UNKNOWN_BUCKET_KEY : exceptionType;
     }
 }

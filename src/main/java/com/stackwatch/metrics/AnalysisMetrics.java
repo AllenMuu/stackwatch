@@ -9,7 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 横切A度量层：{@code ErrorAnalyzer} 三层级联归并的指标埋点入口。
@@ -29,7 +31,7 @@ import java.time.Duration;
  * </ul>
  *
  * <p>对应架构层：横切A度量层。埋点位置由 {@link com.stackwatch.analyzer.ErrorAnalyzer}
- * 在 L1/L2/L3 三处 return 前调用（精确改法见本次返回的 {@code existingFileChanges}）。
+ * 在 L1/L2/L3 三处 return 前经 {@link #recordAnalysis} 调用。
  *
  * <p>实现说明：micrometer 1.15.x（Spring Boot 4.1 引入版本）无独立 Histogram 顶层计量类型，
  * 置信度分布使用 {@link DistributionSummary}——Prometheus 仍以 {@code _bucket/_count/_sum}
@@ -63,18 +65,51 @@ public class AnalysisMetrics {
     private static final double CONFIDENCE_MAX = 1.0;
 
     private final MeterRegistry meterRegistry;
+    /** path -> Timer，启动期一次性注册，避免每次 analyze 重建 builder（L1 命中占 ~95% 热路径）。 */
+    private final Map<AnalysisPath, Timer> durationTimers;
+    /** 置信度分布计量（无动态 tag），启动期注册复用。 */
+    private final DistributionSummary confidenceSummary;
+    /** token 消耗计数（无动态 tag），启动期注册复用。 */
+    private final Counter tokenCounter;
 
     public AnalysisMetrics(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
+        this.durationTimers = new EnumMap<>(AnalysisPath.class);
+        for (AnalysisPath path : AnalysisPath.values()) {
+            durationTimers.put(path, Timer.builder(DURATION_METRIC)
+                .description("Error analysis latency by merge path (seconds)")
+                .tag(TAG_PATH, pathName(path))
+                .register(meterRegistry));
+        }
+        this.confidenceSummary = DistributionSummary.builder(CONFIDENCE_METRIC)
+            .description("LLM root cause confidence distribution")
+            .register(meterRegistry);
+        this.tokenCounter = Counter.builder(TOKEN_METRIC)
+            .description("LLM token cost for L3 root cause analysis")
+            .register(meterRegistry);
     }
 
     /**
-     * 记录归并路径计数。在 L1/L2/L3 三处 return 前调用。
+     * 一次记录归并路径计数 + 单次分析耗时（L1/L2/L3 三处 return 前调用）。
+     * path 标签在两个指标间保持一致，避免调用方分别传参导致标签漂移。
+     *
+     * @param path    归并路径枚举
+     * @param appName 来源应用名，null 时记为 {@code unknown}（防御 MDC 缺失）
+     * @param nanos   {@code analyze()} 全流程纳秒耗时（{@code System.nanoTime()} 差值）
+     */
+    public void recordAnalysis(AnalysisPath path, String appName, long nanos) {
+        recordPath(path, appName);
+        recordDuration(nanos, path);
+    }
+
+    /**
+     * 记录归并路径计数。
      *
      * @param path    归并路径枚举
      * @param appName 来源应用名，null 时记为 {@code unknown}（防御 MDC 缺失）
      */
     public void recordPath(AnalysisPath path, String appName) {
+        // appName 为开放基数 tag，依赖 MeterRegistry 按 name+tags 去重，不做 per-app 缓存。
         Counter.builder(PATH_METRIC)
             .description("Error analysis merge path distribution (cache_hit / vector_merged / llm_new)")
             .tag(TAG_PATH, pathName(path))
@@ -95,11 +130,7 @@ public class AnalysisMetrics {
             log.warn("Negative analysis duration {} ns for path {}; skipping", nanos, path);
             return;
         }
-        Timer.builder(DURATION_METRIC)
-            .description("Error analysis latency by merge path (seconds)")
-            .tag(TAG_PATH, pathName(path))
-            .register(meterRegistry)
-            .record(Duration.ofNanos(nanos));
+        durationTimers.get(path).record(nanos, TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -112,10 +143,7 @@ public class AnalysisMetrics {
             log.warn("Confidence {} out of [0,1]; skipping distribution record", confidence);
             return;
         }
-        DistributionSummary.builder(CONFIDENCE_METRIC)
-            .description("LLM root cause confidence distribution")
-            .register(meterRegistry)
-            .record(confidence);
+        confidenceSummary.record(confidence);
     }
 
     /**
@@ -125,11 +153,7 @@ public class AnalysisMetrics {
      * @param tokens 本次 L3 调用消耗 token 数；负数按 0 计（防御异常上游）
      */
     public void recordTokens(int tokens) {
-        int safeTokens = Math.max(0, tokens);
-        Counter.builder(TOKEN_METRIC)
-            .description("LLM token cost for L3 root cause analysis")
-            .register(meterRegistry)
-            .increment(safeTokens);
+        tokenCounter.increment(Math.max(0, tokens));
     }
 
     /** 枚举转 Prometheus tag 小写蛇形值，与口径 cache_hit/vector_merged/llm_new 对齐。 */

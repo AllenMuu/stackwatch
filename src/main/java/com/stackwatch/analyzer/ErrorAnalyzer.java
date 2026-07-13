@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * 错误分析器：③分析层核心，三层级联归并。
@@ -88,8 +87,7 @@ public class ErrorAnalyzer {
         Optional<RootCauseAnalysis> cached = fingerprintCache.lookup(fp.hash());
         if (cached.isPresent()) {
             log.debug("L1 cache hit: {}", fp.hash());
-            metrics.recordPath(AnalysisPath.CACHE_HIT, event.appName());
-            metrics.recordDuration(System.nanoTime() - start, AnalysisPath.CACHE_HIT);
+            metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
             return AnalysisResult.cacheHit(fp.hash(), cached.get());
         }
 
@@ -102,8 +100,7 @@ public class ErrorAnalyzer {
                 clusterRepository.save(updated);
                 fingerprintCache.put(fp.hash(), updated.analysis());
                 log.debug("L2 vector merged: {} -> cluster {}", fp.hash(), updated.clusterId());
-                metrics.recordPath(AnalysisPath.VECTOR_MERGED, event.appName());
-                metrics.recordDuration(System.nanoTime() - start, AnalysisPath.VECTOR_MERGED);
+                metrics.recordAnalysis(AnalysisPath.VECTOR_MERGED, event.appName(), System.nanoTime() - start);
                 return AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis());
             }
         }
@@ -120,8 +117,7 @@ public class ErrorAnalyzer {
         fingerprintCache.put(fp.hash(), analyzed);
         log.info("L3 llm new: {} -> cluster {} (confidence={}, review={})",
             fp.hash(), clusterId, analyzed.confidence(), analyzed.needHumanReview());
-        metrics.recordPath(AnalysisPath.LLM_NEW, event.appName());
-        metrics.recordDuration(System.nanoTime() - start, AnalysisPath.LLM_NEW);
+        metrics.recordAnalysis(AnalysisPath.LLM_NEW, event.appName(), System.nanoTime() - start);
         return AnalysisResult.llmNew(fp.hash(), clusterId, analyzed);
     }
 
@@ -131,9 +127,9 @@ public class ErrorAnalyzer {
             event.exceptionType(), HISTORICAL_SAMPLE_LIMIT);
         String historicalSamples = samples.isEmpty()
             ? NO_HISTORICAL_SAMPLES
-            : samples.stream()
+            : String.join("\n", samples.stream()
                 .map(s -> "- 堆栈摘要: " + s.stackText() + "\n  正确根因: " + s.correctRootCause())
-                .collect(Collectors.joining("\n"));
+                .toList());
 
         Map<String, Object> vars = new HashMap<>();
         vars.put("appName", event.appName());

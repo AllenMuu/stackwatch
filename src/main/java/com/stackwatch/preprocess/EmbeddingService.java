@@ -2,7 +2,6 @@ package com.stackwatch.preprocess;
 
 import com.stackwatch.domain.ErrorEvent;
 import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Embedding 服务：L2 向量归并的输入。
@@ -22,7 +21,7 @@ public class EmbeddingService {
     private final EmbeddingModel embeddingModel;
 
     public EmbeddingService(Fingerprinter fingerprinter, EmbeddingRendering rendering,
-                            @Autowired(required = false) EmbeddingModel embeddingModel) {
+                            EmbeddingModel embeddingModel) {
         this.fingerprinter = fingerprinter;
         this.rendering = rendering;
         this.embeddingModel = embeddingModel;

@@ -41,7 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * // List<Document> hits = vectorStore.similaritySearch(
  * //     SearchRequest.builder()
  * //         .query(embedding)            // float[] 重载，当前不可用
- * //         .topK(TOP_K)
+ * //         .topK(1)
  * //         .similarityThreshold(threshold)
  * //         .build());
  * }</pre>
@@ -58,9 +58,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PgVectorClusterRepository implements ClusterRepository {
 
     private static final Logger log = LoggerFactory.getLogger(PgVectorClusterRepository.class);
-
-    /** 相似检索只取最相似的 1 个簇。 */
-    private static final int TOP_K = 1;
 
     /** Document metadata key：簇 ID。 */
     private static final String META_CLUSTER_ID = "clusterId";
@@ -82,7 +79,6 @@ public class PgVectorClusterRepository implements ClusterRepository {
     /**
      * @param vectorStore Spring AI 向量库（L2 未配 DB 时为 null，findSimilar/save 优雅降级）
      */
-    @Autowired
     public PgVectorClusterRepository(@Autowired(required = false) VectorStore vectorStore) {
         this.vectorStore = vectorStore;
     }
@@ -129,9 +125,8 @@ public class PgVectorClusterRepository implements ClusterRepository {
             .id(cluster.clusterId())
             .text(buildClusterText(cluster))
             .metadata(META_CLUSTER_ID, cluster.clusterId())
-            .metadata(META_APP_NAME, cluster.appName() == null ? UNKNOWN : cluster.appName())
-            .metadata(META_EXCEPTION_TYPE,
-                cluster.exceptionType() == null ? UNKNOWN : cluster.exceptionType())
+            .metadata(META_APP_NAME, nullToUnknown(cluster.appName()))
+            .metadata(META_EXCEPTION_TYPE, nullToUnknown(cluster.exceptionType()))
             .metadata(META_MEMBER_COUNT, cluster.memberCount())
             .build();
         try {
@@ -160,9 +155,14 @@ public class PgVectorClusterRepository implements ClusterRepository {
      * 此文本仅用于持久化与未来切换 SearchRequest 时的检索基础。
      */
     private static String buildClusterText(ErrorCluster cluster) {
-        String type = cluster.exceptionType() == null ? UNKNOWN : cluster.exceptionType();
-        String hash = cluster.representativeHash() == null ? UNKNOWN : cluster.representativeHash();
+        String type = nullToUnknown(cluster.exceptionType());
+        String hash = nullToUnknown(cluster.representativeHash());
         return type + "\n" + hash;
+    }
+
+    /** null 归一为 {@link #UNKNOWN}（Document metadata 不允许 null value）。 */
+    private static String nullToUnknown(String value) {
+        return value == null ? UNKNOWN : value;
     }
 
     /**
