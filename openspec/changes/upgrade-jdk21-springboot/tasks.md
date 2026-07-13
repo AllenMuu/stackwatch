@@ -9,23 +9,24 @@
 
 ## 2. JDK 工具链切换
 
-- [ ] 2.1 `jenv local 21`(或等价命令)将项目 JDK 切换到 21
-- [ ] 2.2 `mvn -v` 确认 JDK 21 生效
+- [x] 2.1 `jenv local 21`(或等价命令)将项目 JDK 切换到 21
+- [x] 2.2 `mvn -v` 确认 JDK 21 生效
 
 ## 3. pom 版本切换
 
-- [ ] 3.1 `pom.xml` 中 `java.version` 从 `17` 改为 `21`
-- [ ] 3.2 `spring-boot-starter-parent` 从 `3.4.0` 改为 `4.1.0`
-- [ ] 3.3 `spring-ai.version` 从 `1.0.0` 改为 `2.0.0`
-- [ ] 3.4 核对并补全 4.0 starter 重组:若 `spring-boot-starter-web` 需显式 tomcat runtime starter 则补;补全 micrometer metrics starter(精确 artifactId 查 4.0 迁移文档)
-- [ ] 3.5 运行 `mvn dependency:tree` 确认传递依赖解析正常,无冲突
+- [x] 3.1 `pom.xml` 中 `java.version` 从 `17` 改为 `21`
+- [x] 3.2 `spring-boot-starter-parent` 从 `3.4.0` 改为 `4.1.0`
+- [x] 3.3 `spring-ai.version` 从 `1.0.0` 改为 `2.0.0`
+- [x] 3.4 核对并补全 4.0 starter 重组:若 `spring-boot-starter-web` 需显式 tomcat runtime starter 则补;补全 micrometer metrics starter(精确 artifactId 查 4.0 迁移文档)
+- [x] 3.5 运行 `mvn dependency:tree` 确认传递依赖解析正常,无冲突
 
 ## 4. 编译期 breaking 修复
 
-- [ ] 4.1 运行 `mvn clean compile` 收集编译错误
-- [ ] 4.2 适配 Spring AI 2.0 `ChatClient` API 签名变更(`ErrorAnalyzer.callLlm` 的 `.tools()` / `.entity()` / `.content()`);Spring AI 1.0 -> 2.0 跨大版本,查 2.0 upgrade notes 做最小改动
-- [ ] 4.3 `grep -rn "javax\." src/` 确认无 Jakarta EE 迁移残留(预计无,因 3.4 已是 jakarta)
-- [ ] 4.4 确认 `mvn clean compile` 通过
+- [x] 4.1 运行 `mvn clean compile` 收集编译错误
+- [x] 4.2 适配 Spring AI 2.0 `ChatClient` API 签名变更(`ErrorAnalyzer.callLlm` 的 `.tools()` / `.entity()` / `.content()`);Spring AI 1.0 -> 2.0 跨大版本,查 2.0 upgrade notes 做最小改动
+  - 结果:`ErrorAnalyzer.callLlm` 当前链式调用 `prompt().user().tools().call().entity()` 在 Spring AI 2.0 下仍可编译;`.tools(Object...)` 继续支持 `@Tool` POJO(见 upgrade notes)。实际编译错误来自 Spring Boot 4.1 包路径重组:`MeterRegistryCustomizer` 与 `RestTemplateBuilder` 迁移,已在 `MetricsConfig` / `NotifierConfig` 中修复。
+- [x] 4.3 `grep -rn "javax\." src/main/java/` 确认无 Jakarta EE 迁移残留(仅 `Fingerprinter` 中的字符串字面量过滤前缀命中,非 import)
+- [x] 4.4 确认 `mvn clean compile` 通过
 
 ## 5. autoconfigure.exclude 核对(高危,已确认模块重组)
 

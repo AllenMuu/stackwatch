@@ -1,7 +1,7 @@
 package com.stackwatch.metrics;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.boot.actuate.autoconfigure.metrics.MeterRegistryCustomizer;
+import org.springframework.boot.micrometer.metrics.autoconfigure.MeterRegistryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,8 +15,8 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>对应架构层：横切A度量层。
  *
- * <p>依赖前提：{@code MeterRegistryCustomizer} 位于 spring-boot-actuator-autoconfigure，
- * {@link MeterRegistry} bean 与 {@code /actuator/prometheus} 端点也由 spring-boot-starter-actuator
+ * <p>依赖前提：{@code MeterRegistryCustomizer} 位于 spring-boot-micrometer-metrics(Spring Boot 4.1 起从 spring-boot-actuator-autoconfigure 迁移至此)，
+ * {@link MeterRegistry} bean 与 {@code /actuator/prometheus} 端点由 spring-boot-starter-actuator
  * 自动装配；micrometer-registry-prometheus 提供 {@code PrometheusMeterRegistry}。
  * 故 pom 需同时引入 spring-boot-starter-actuator 与 micrometer-registry-prometheus。
  */
