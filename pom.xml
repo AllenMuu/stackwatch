@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.0</version>
+        <version>4.1.0</version>
         <relativePath/>
     </parent>
 
@@ -18,8 +18,8 @@
     <description>AI-powered Java production error root cause analysis: stacktrace fingerprinting + LLM root cause + weekly digest</description>
 
     <properties>
-        <java.version>17</java.version>
-        <spring-ai.version>1.0.0</spring-ai.version>
+        <java.version>21</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -40,6 +40,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-tomcat</artifactId>
+        </dependency>
 
         <!-- LLM 接入（DashScope 兼容 OpenAI 协议，通过 base-url 切换） -->
         <dependency>
@@ -57,6 +61,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-micrometer-metrics</artifactId>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
