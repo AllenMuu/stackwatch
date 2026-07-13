@@ -2,9 +2,9 @@
 
 [English](README.md) | **中文**
 
-![Java](https://img.shields.io/badge/Java-17-ED8B00?logo=openjdk&logoColor=white)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot&logoColor=white)
-![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-6DB33F)
+![Java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-2.0-6DB33F)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 > AI 驱动的 Java 生产错误根因分析 - 异常堆栈指纹归并 + LLM 根因定位 + 定时周报聚合。
@@ -59,7 +59,7 @@ flowchart TD
 
 ## 环境要求
 
-- **JDK 17+** - Spring Boot 3.4 + Spring AI 1.0 强制要求（不支持 Java 8/11）
+- **JDK 21+** - Spring Boot 4.1 + Spring AI 2.0 强制要求（不支持 Java 8/11/17）
 - **Maven 3.6+**
 
 ## 快速开始
@@ -98,8 +98,8 @@ MVP 阶段 - 核心分析链路已通，部分模块待接入。
 
 | 领域 | 选型 |
 |------|------|
-| 框架 | Spring Boot 3.4 + Java 17 |
-| LLM | Spring AI 1.0（OpenAI 兼容协议，DashScope/DeepSeek 可切换） |
+| 框架 | Spring Boot 4.1 + Java 21 |
+| LLM | Spring AI 2.0（OpenAI 兼容协议，DashScope/DeepSeek 可切换） |
 | L1 缓存 | Caffeine |
 | L2 向量 | PgVector（待接入） |
 

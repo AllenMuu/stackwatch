@@ -23,13 +23,11 @@ spring:
       api-key: ${DASHSCOPE_API_KEY:}
       base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       chat:
-        options:
-          model: ${LLM_CHAT_MODEL:qwen-plus}
-          temperature: 0.2
+        model: ${LLM_CHAT_MODEL:qwen-plus}
+        temperature: 0.2
       # embedding 暂不启用（L2 向量归并解锁后再配）
       # embedding:
-      #   options:
-      #     model: text-embedding-v3
+      #   model: text-embedding-v3
 
 stackwatch:
   analysis:
