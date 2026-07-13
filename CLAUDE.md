@@ -8,7 +8,7 @@ StackWatch is an AI-driven root cause analysis system for Java production errors
 
 ## Build & Run
 
-**JDK 17 is mandatory** (Spring Boot 3.4 + Spring AI 1.0 require it). The local JDK version is managed by **jenv** and can be freely switched — no need to manually `export JAVA_HOME`. Just ensure `jenv` is set to 17 for this project before building, or compilation will fail.
+**JDK 21 is mandatory** (Spring Boot 4.1 + Spring AI 2.0 require it). The local JDK version is managed by **jenv** and can be freely switched — no need to manually `export JAVA_HOME`. Just ensure `jenv` is set to 21 for this project before building, or compilation will fail.
 
 Common commands:
 ```bash
@@ -63,7 +63,7 @@ The project starts with **no DB / no Kafka / no vector store** by default, contr
 
 `ClusterRepository` has two mutually exclusive implementations selected by `stackwatch.l2.enabled`: `InMemoryClusterRepository` (`havingValue=false, matchIfMissing=true`; `findSimilar` always returns empty, forcing L3) vs `PgVectorClusterRepository` (`havingValue=true`).
 
-> Note: even when L2 is enabled, `PgVectorClusterRepository.findSimilar` currently still uses **in-memory cosine similarity** over cluster embeddings rather than `VectorStore.similaritySearch` — because Spring AI 1.0.0's `SearchRequest.query()` accepts only `String`, not `float[]` (verified against source; see that class's Javadoc). Confirm whether your Spring AI version supports vector input before changing this.
+> Note: even when L2 is enabled, `PgVectorClusterRepository.findSimilar` currently still uses **in-memory cosine similarity** over cluster embeddings rather than `VectorStore.similaritySearch` — because Spring AI 2.0.0's `SearchRequest.query()` accepts only `String`, not `float[]` (verified against source; see that class's Javadoc). Confirm whether your Spring AI version supports vector input before changing this.
 
 ### Three collection entry points
 
@@ -90,7 +90,7 @@ Unified `stackwatch.` prefix; the key tag is `path=cache_hit|vector_merged|llm_n
 - **Configuration**: all `stackwatch.*` config uses record `@ConfigurationProperties` with range validation and default fallback inside the compact constructor (e.g. `AnalysisProperties`, `CacheProperties`). Prefixes: `stackwatch.analysis` / `stackwatch.cache` / `stackwatch.l2` / `stackwatch.collector.kafka` / `stackwatch.feishu`.
 - **Prompt template**: `resources/prompts/root-cause.st` + `PromptTemplateHolder` does its own `{var}` replacement — **does not use the Spring AI template API** (version-sensitive). Adding a variable requires updating both the template and the vars map in `ErrorAnalyzer.callLlm`.
 - **Error handling**: collection / delivery / embedding failures never block the main pipeline — they `log.warn` and degrade (embedding failure -> null -> skip L2; LLM failure -> fallback root cause; Feishu failure -> skip push).
-- **Spring AI API is version-sensitive**: `ChatClient`'s `.tools()` / `.entity()` / `.content()` signatures may change across versions; relevant class Javadocs note "refer to official docs". Verify against the actual Spring AI 1.0.0 signatures before changing these calls.
+- **Spring AI API is version-sensitive**: `ChatClient`'s `.tools()` / `.entity()` / `.content()` signatures may change across versions; relevant class Javadocs note "refer to official docs". Verify against the actual Spring AI 2.0.0 signatures before changing these calls.
 - **Dependencies unlocked on demand**: `resilience4j`, `spring-boot-starter-data-redis`, etc. exist as comments in pom.xml; uncomment when needed (versions are managed by the Spring Boot parent, no explicit version required).
 
 <!-- Source: superpowers-bridge/templates/adopters/CLAUDE.md.fragment.md -->
@@ -99,16 +99,20 @@ Unified `stackwatch.` prefix; the key tag is `path=cache_hit|vector_merged|llm_n
 
 ## Workflow routing (read on session start)
 
-This repo uses [`superpowers-bridge`](https://github.com/JiangWay/openspec-schemas/tree/main/superpowers-bridge) to bridge OpenSpec and Superpowers. Integration rules (language, artifact paths, PRECHECK) follow that bridge's README; this section is the routing guidance for Claude.
+This repo uses [`superpowers-bridge`](https://github.com/JiangWay/openspec-schemas/tree/main/superpowers-bridge) as the **default** workflow schema, integrating OpenSpec (what to do) with Superpowers (how to do it: brainstorming, writing-plans, git-worktrees, subagent-driven-development, TDD, code-review). Integration rules (language, artifact paths, PRECHECK) follow that bridge's README; this section is the routing guidance for Claude.
+
+**Default schema = `superpowers-bridge`** (set in `openspec/config.yaml`). `/opsx:propose` therefore runs the full aggregated flow by default: `brainstorm -> proposal -> design -> specs -> tasks -> plan -> [apply] -> verify -> retrospective`. For lighter changes pass `--schema spec-driven` to `openspec new change`. Trivial fixes skip opsx entirely (direct PR).
 
 ### Entry routing
 
 | Trigger you observe | What to do |
 |---|---|
 | User starts a narrative "design discussion / let's brainstorm" | Run verbal `superpowers:brainstorming`, but **do NOT** write to `docs/superpowers/specs/`. Once the conversation converges per the 5 criteria below, promote to `/opsx:propose` |
-| User invokes `/opsx:new` / `/opsx:ff` / `/opsx:propose` directly | Follow the schema's flow; artifact instructions inject at each step |
+| User invokes `/opsx:propose` directly | Follow the schema's flow; artifact instructions inject at each step (default schema = superpowers-bridge) |
 | User explicitly says bug fix / typo / config tweak / doc update | Direct PR — **do NOT** open a change (see skip rules below) |
-| User is mid-change | Advance with `/opsx:continue`, `/opsx:apply`, `/opsx:verify`, or `/opsx:archive` |
+| User is mid-change | Advance with `/opsx:apply` (worktree + subagent-driven-development) or `/opsx:archive`; use `/opsx:explore` to inspect, `/opsx:sync` to merge specs into main |
+
+> v1.5.0 command set: `propose / apply / archive / explore / sync`. There is no `/opsx:new` / `/opsx:ff` / `/opsx:continue` / `/opsx:verify` in this version.
 
 ### When NOT to use opsx (direct PR)
 

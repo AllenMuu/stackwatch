@@ -29,3 +29,6 @@ application-secret.yml
 
 # Maven
 *.lastUpdated
+
+# Claude Code（opsx 命令/skills 团队共享；本地设置不入库）
+.claude/settings.local.json

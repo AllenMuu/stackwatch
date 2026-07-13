@@ -2,9 +2,9 @@
 
 **English** | [中文](README_zh.md)
 
-![Java](https://img.shields.io/badge/Java-17-ED8B00?logo=openjdk&logoColor=white)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot&logoColor=white)
-![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-6DB33F)
+![Java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-2.0-6DB33F)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 > AI-driven root cause analysis for Java production errors — stacktrace fingerprint merging + LLM root cause localization + scheduled weekly digest.
@@ -59,7 +59,7 @@ The Analyzer is the hub of the system. Most exceptions are resolved for free at 
 
 ## Requirements
 
-- **JDK 17+** — required by Spring Boot 3.4 + Spring AI 1.0 (Java 8/11 not supported)
+- **JDK 21+** — required by Spring Boot 4.1 + Spring AI 2.0 (Java 8/11/17 not supported)
 - **Maven 3.6+**
 
 
@@ -99,8 +99,8 @@ MVP — the core analysis pipeline works; several modules are pending integratio
 
 | Area | Choice |
 |------|--------|
-| Framework | Spring Boot 3.4 + Java 17 |
-| LLM | Spring AI 1.0 (OpenAI-compatible; DashScope/DeepSeek switchable) |
+| Framework | Spring Boot 4.1 + Java 21 |
+| LLM | Spring AI 2.0 (OpenAI-compatible; DashScope/DeepSeek switchable) |
 | L1 cache | Caffeine |
 | L2 vectors | PgVector (pending integration) |
 

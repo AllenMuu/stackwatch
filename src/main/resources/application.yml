@@ -8,9 +8,9 @@ spring:
     # - KafkaAutoConfiguration：①采集层 Kafka（stackwatch.collector.kafka.enabled=false）
     # 启用对应模块时从 exclude 列表移除相关项 + 配置对应依赖
     exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
       - org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration
-      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      - org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration
 
   kafka:
     # Kafka broker 占位；Kafka 关闭时此配置不生效（KafkaAutoConfiguration 已被 exclude）
@@ -23,13 +23,11 @@ spring:
       api-key: ${DASHSCOPE_API_KEY:}
       base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       chat:
-        options:
-          model: ${LLM_CHAT_MODEL:qwen-plus}
-          temperature: 0.2
+        model: ${LLM_CHAT_MODEL:qwen-plus}
+        temperature: 0.2
       # embedding 暂不启用（L2 向量归并解锁后再配）
       # embedding:
-      #   options:
-      #     model: text-embedding-v3
+      #   model: text-embedding-v3
 
 stackwatch:
   analysis:

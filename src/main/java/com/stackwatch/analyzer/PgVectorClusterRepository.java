@@ -27,9 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>配置 LLM API Key（EmbeddingModel 由 spring-ai-starter-model-openai 提供）。</li>
  * </ol>
  *
- * <h3>Spring AI 1.0.0 API 说明（源码核实）</h3>
+ * <h3>Spring AI 2.0.0 API 说明（源码核实）</h3>
  * <p>{@code SearchRequest.Builder.query()} 仅接受 {@code String}，<b>不接受</b>
- * {@code float[]}（任务假设的 {@code query(float[])} 重载在 1.0.0 GA 不存在）。
+ * {@code float[]}（任务假设的 {@code query(float[])} 重载在 2.0.0 GA 不存在）。
  * 而 {@link ClusterRepository#findSimilar(float[], double)} 的接口契约传入的是
  * 预计算 embedding（由 {@code EmbeddingService} 产出），无法逆向还原为文本。
  *
@@ -97,9 +97,9 @@ public class PgVectorClusterRepository implements ClusterRepository {
             return Optional.empty();
         }
 
-        // Spring AI 1.0.0 的 SearchRequest.query() 仅接受 String（源码核实），
+        // Spring AI 2.0.0 的 SearchRequest.query() 仅接受 String（源码核实），
         // 无法直接传入预计算 float[]。当前用内存余弦相似度比对簇 embedding，
-        // 保持 0 token。详见类 Javadoc「Spring AI 1.0.0 API 说明」。
+        // 保持 0 token。详见类 Javadoc「Spring AI 2.0.0 API 说明」。
         ErrorCluster best = null;
         double bestScore = INVALID_SIMILARITY;
         for (ErrorCluster cluster : clusterIndex.values()) {
