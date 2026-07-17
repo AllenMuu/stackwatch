@@ -21,6 +21,11 @@ mvn test -Dtest=ErrorAnalyzerUnitTest#l1CacheHitSkipsLlmAndEmbedding  # single t
 
 **LLM secrets go through environment variables only — never hardcode them**: `DASHSCOPE_API_KEY` (required to call the LLM), `LLM_BASE_URL`, `LLM_CHAT_MODEL`, `KAFKA_BOOTSTRAP`, `FEISHU_WEBHOOK_URL`, `FEISHU_API_URL`.
 
+## CodeStyle
+**Google Java Style Guide**
+- The function / method should have less than 5 parameters
+
+
 ## Test Layering
 
 - **Pure unit tests (CI-friendly, no LLM key)**: `ErrorAnalyzerUnitTest`, `FingerprinterTest`. `ErrorAnalyzerUnitTest` uses Mockito to chain-mock `ChatClient` (prompt->user->tools->call->entity) and covers L1 hit / L2 merge / L3 new cluster / confidence fallback / LLM-exception fallback. **Tests for the core merge logic must not depend on a real LLM.**
