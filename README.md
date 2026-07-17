@@ -57,6 +57,18 @@ The Analyzer is the hub of the system. Most exceptions are resolved for free at 
 | **L2** | Approximate vector merge | ≈ 0 |
 | **L3** | LLM root cause on cluster representative | real LLM call (~1%) |
 
+### Review level & feedback flywheel
+
+Beyond the cost ladder, the L3 path applies a **three-tier review gate** (inspired by PagePilot's confidence gating):
+
+| Confidence / signal | Review level | Action |
+|---------------------|--------------|--------|
+| >= high threshold (0.9) + evidence | `AUTO_CONFIRMED` | auto-attest, no human |
+| between fallback (0.6) and high + evidence | `NEEDS_CONFIRMATION` | output root cause, flag for low-touch confirmation |
+| < fallback / no evidence / LLM failure | `NEEDS_HUMAN_REVIEW` | escalate to human |
+
+The feedback layer is a **bidirectional flywheel**: a developer confirms or corrects a root cause via `POST /feedback` -> a positive sample (few-shot, "answer this way") and, when `wrongRootCause` is present, a negative sample (anti-pattern, "don't answer that way"). Both are injected into the next L3 prompt--positive guides, negative warns. This is PagePilot's `known-failures` idea applied to the negative side, pairing with the few-shot positive side for a complete self-learning loop.
+
 ## Requirements
 
 - **JDK 21+** — required by Spring Boot 4.1 + Spring AI 2.0 (Java 8/11/17 not supported)
@@ -93,7 +105,7 @@ MVP — the core analysis pipeline works; several modules are pending integratio
 | L2 vector merge — interface defined, pending PgVector integration | 🚧 Pending |
 | ① Collector — pending Kafka / Logback Appender integration | 🚧 Pending |
 | ④ ⑤ Aggregator / Notifier — pending Feishu weekly report | 🚧 Pending |
-| Cross-cutting A/B — pending Micrometer + feedback loop | 🚧 Pending |
+| Cross-cutting A/B — Micrometer metrics + bidirectional feedback flywheel (few-shot + anti-pattern) | ✅ Done |
 
 ## Tech Stack
 
@@ -111,6 +123,7 @@ Design inspiration from:
 - **PostHog** error_tracking — fingerprint algorithm versioning, embedding rendering metadata, weekly report structure
 - **Arvo-AI/aurora** — post-RCA action automation, knowledge-base accumulation
 - **salesforce/PyRCA** — RCA evaluation methodology
+- **PagePilot** (Alipay merchant-center testing team) – confidence-tiered review gating (auto / needs-confirmation / needs-human-review) and the known-failures self-learning library; adapted here as the three-tier review level on L3 plus the positive/negative bidirectional feedback flywheel (few-shot + anti-pattern)
 
 ## License
 

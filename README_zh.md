@@ -57,6 +57,18 @@ flowchart TD
 | **L2** | 向量近似归并 | ≈ 0 |
 | **L3** | LLM 簇代表根因分析 | 真正调 LLM（约 1%） |
 
+### 复核级别与反馈飞轮
+
+成本阶梯之外，L3 路径还套了一层**三档复核门控**（借鉴 阿里云开发者公众号PagePilot 置信度分档）：
+
+| 置信度 / 信号 | 复核级别 | 动作 |
+|--------------|---------|------|
+| >= 高阈值（0.9）且有证据 | `AUTO_CONFIRMED` | 自动归因，不打扰研发 |
+| 兜底阈值（0.6）与高阈值之间且有证据 | `NEEDS_CONFIRMATION` | 输出根因，标记待确认（低介入确认） |
+| < 兜底阈值 / 无证据 / LLM 失败 | `NEEDS_HUMAN_REVIEW` | 转人工排查 |
+
+反馈层是**正负双向飞轮**：研发通过 `POST /feedback` 确认或纠正根因 -> 正样本（few-shot，「该这么答」）+ 当携带 `wrongRootCause` 时负样本（anti-pattern，「别这么答」）。两者都注入下一次 L3 prompt--正样本引导、负样本警示。这是 PagePilot `known-failures` 思想在负样本侧的落地，与 few-shot 正样本侧对偶，构成完整自学习闭环。
+
 ## 环境要求
 
 - **JDK 21+** - Spring Boot 4.1 + Spring AI 2.0 强制要求（不支持 Java 8/11/17）
@@ -92,7 +104,7 @@ MVP 阶段 - 核心分析链路已通，部分模块待接入。
 | L2 向量归并 - 接口已定义，待接入 PgVector | 🚧 待接入 |
 | ① 采集层 - 待接入 Kafka / Logback Appender | 🚧 待接入 |
 | ④ ⑤ 聚合层 / 投递层 - 待实现飞书周报 | 🚧 待接入 |
-| 横切 A/B - 待接入 Micrometer + 反馈闭环 | 🚧 待接入 |
+| 横切 A/B - Micrometer 度量 + 正负双向反馈飞轮（few-shot + anti-pattern） | ✅ 已完成 |
 
 ## 技术栈
 
@@ -110,6 +122,7 @@ MVP 阶段 - 核心分析链路已通，部分模块待接入。
 - **PostHog** error_tracking：指纹算法版本化、embedding rendering 元数据、周报结构
 - **Arvo-AI/aurora**：RCA 后动作自动化、知识库积累思想
 - **salesforce/PyRCA**：RCA 评估方法论
+- **PagePilot**（支付宝商家中心测试团队）：置信度分档门控（自动 / 待确认 / 转人工）与 known-failures 失败模式自学习库；本项目的 L3 三档复核级别 + 正负双向反馈飞轮（few-shot + anti-pattern）即借鉴于此
 
 ## 许可证
 

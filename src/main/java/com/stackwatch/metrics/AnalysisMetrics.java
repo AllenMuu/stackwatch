@@ -1,6 +1,7 @@
 package com.stackwatch.metrics;
 
 import com.stackwatch.domain.AnalysisPath;
+import com.stackwatch.domain.ReviewLevel;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -16,25 +17,29 @@ import java.util.concurrent.TimeUnit;
 /**
  * 横切A度量层：{@code ErrorAnalyzer} 三层级联归并的指标埋点入口。
  *
- * <p>四类指标（统一 {@code stackwatch.} 前缀）：
+ * <p>五类指标（统一 {@code stackwatch.} 前缀）：
  * <ul>
- *   <li>{@code stackwatch.analysis_duration_seconds}（Timer，tag: path）—— 定位耗时，
+ *   <li>{@code stackwatch.analysis_duration_seconds}（Timer，tag: path）-- 定位耗时，
  *       支撑「定位耗时缩短 40%」的度量底气：没有这层埋点，「40%」只是话术；
  *       有了 Timer + path tag，可在 Prometheus 按 path 切片算 P50/P95，量化缓存命中率对耗时的贡献。</li>
- *   <li>{@code stackwatch.analysis_path_total}（Counter，tag: path/appName）——
+ *   <li>{@code stackwatch.analysis_path_total}（Counter，tag: path/appName）--
  *       归并路径分布 {@code path=cache_hit/vector_merged/llm_new}，支撑
  *       「95% 走缓存、4% 走向量归并、仅 1% 真调 LLM」的成本故事。</li>
- *   <li>{@code stackwatch.root_cause_confidence}（DistributionSummary，Prometheus 以 histogram 桶暴露）——
+ *   <li>{@code stackwatch.root_cause_confidence}（DistributionSummary，Prometheus 以 histogram 桶暴露）--
  *       根因置信度分布，配合 {@code confidence-threshold=0.6} 兜底阈值观察低置信度占比。</li>
- *   <li>{@code stackwatch.token_cost_total}（Counter）—— L3 调用 token 消耗，当前占位 0，
+ *   <li>{@code stackwatch.token_cost_total}（Counter）-- L3 调用 token 消耗，当前占位 0，
  *       待 LLM 响应 usage 接入后累加真实值（见 {@link #recordTokens(int)}）。</li>
+ *   <li>{@code stackwatch.review_level_total}（Counter，tag: level）--
+ *       根因复核级别分布 {@code level=auto_confirmed/needs_confirmation/needs_human_review}，
+ *       量化三档门控的自动化率（auto 占比越高，人工介入越少）。借鉴 PagePilot 置信度分档门控。</li>
  * </ul>
  *
  * <p>对应架构层：横切A度量层。埋点位置由 {@link com.stackwatch.analyzer.ErrorAnalyzer}
- * 在 L1/L2/L3 三处 return 前经 {@link #recordAnalysis} 调用。
+ * 在 L1/L2/L3 三处 return 前经 {@link #recordAnalysis} 调用；
+ * {@link #recordConfidence} 与 {@link #recordReviewLevel} 仅 L3 调用（L1/L2 复用历史不重复计数）。
  *
  * <p>实现说明：micrometer 1.15.x（Spring Boot 4.1 引入版本）无独立 Histogram 顶层计量类型，
- * 置信度分布使用 {@link DistributionSummary}——Prometheus 仍以 {@code _bucket/_count/_sum}
+ * 置信度分布使用 {@link DistributionSummary}--Prometheus 仍以 {@code _bucket/_count/_sum}
  * 暴露，语义等价直方图。{@link MeterRegistry} bean 由 spring-boot-micrometer-metrics 自动装配，
  * /prometheus 端点仍由 spring-boot-starter-actuator 提供；
  * PrometheusMeterRegistry 由 micrometer-registry-prometheus 提供。
@@ -54,9 +59,12 @@ public class AnalysisMetrics {
     private static final String CONFIDENCE_METRIC = METRIC_PREFIX + "root_cause_confidence";
     /** token 消耗 Counter 指标名。 */
     private static final String TOKEN_METRIC = METRIC_PREFIX + "token_cost_total";
+    /** 根因复核级别分布 Counter 指标名（tag: level）。 */
+    private static final String REVIEW_LEVEL_METRIC = METRIC_PREFIX + "review_level_total";
 
     private static final String TAG_PATH = "path";
     private static final String TAG_APP = "appName";
+    private static final String TAG_LEVEL = "level";
     private static final String UNKNOWN_APP = "unknown";
 
     /** 置信度合法下界（含），与 RootCauseAnalysis 语义对齐。 */
@@ -71,6 +79,8 @@ public class AnalysisMetrics {
     private final DistributionSummary confidenceSummary;
     /** token 消耗计数（无动态 tag），启动期注册复用。 */
     private final Counter tokenCounter;
+    /** review level -> Counter，启动期一次性注册，避免每次 analyze 重建 builder。 */
+    private final Map<ReviewLevel, Counter> reviewLevelCounters;
 
     public AnalysisMetrics(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
@@ -87,6 +97,13 @@ public class AnalysisMetrics {
         this.tokenCounter = Counter.builder(TOKEN_METRIC)
             .description("LLM token cost for L3 root cause analysis")
             .register(meterRegistry);
+        this.reviewLevelCounters = new EnumMap<>(ReviewLevel.class);
+        for (ReviewLevel level : ReviewLevel.values()) {
+            reviewLevelCounters.put(level, Counter.builder(REVIEW_LEVEL_METRIC)
+                .description("Root cause review level distribution (auto_confirmed / needs_confirmation / needs_human_review)")
+                .tag(TAG_LEVEL, levelName(level))
+                .register(meterRegistry));
+        }
     }
 
     /**
@@ -156,12 +173,33 @@ public class AnalysisMetrics {
         tokenCounter.increment(Math.max(0, tokens));
     }
 
+    /**
+     * 记录根因复核级别分布。仅 L3 调用（L1/L2 复用历史级别不重复计数，与 {@link #recordConfidence} 同口径）。
+     *
+     * @param level 复核级别；null 时静默跳过（防御性兜底）
+     */
+    public void recordReviewLevel(ReviewLevel level) {
+        if (level == null) {
+            return;
+        }
+        reviewLevelCounters.get(level).increment();
+    }
+
     /** 枚举转 Prometheus tag 小写蛇形值，与口径 cache_hit/vector_merged/llm_new 对齐。 */
     private static String pathName(AnalysisPath path) {
         return switch (path) {
             case CACHE_HIT -> "cache_hit";
             case VECTOR_MERGED -> "vector_merged";
             case LLM_NEW -> "llm_new";
+        };
+    }
+
+    /** ReviewLevel 转 Prometheus tag 小写蛇形值。 */
+    private static String levelName(ReviewLevel level) {
+        return switch (level) {
+            case AUTO_CONFIRMED -> "auto_confirmed";
+            case NEEDS_CONFIRMATION -> "needs_confirmation";
+            case NEEDS_HUMAN_REVIEW -> "needs_human_review";
         };
     }
 }

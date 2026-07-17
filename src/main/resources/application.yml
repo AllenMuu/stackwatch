@@ -35,6 +35,8 @@ stackwatch:
     similarity-threshold: 0.92
     # L3 LLM 根因置信度兜底阈值（低于此值转人工）
     confidence-threshold: 0.6
+    # L3 根因置信度高阈值（>= 此值且证据充分自动归因；介于兜底与此值之间为「待确认」中档）
+    confidence-high-threshold: 0.9
     # 指纹参与 hash 的栈顶业务帧数
     fingerprint-top-n: 5
   cache:

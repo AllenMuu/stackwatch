@@ -3,15 +3,19 @@ package com.stackwatch.analyzer;
 import com.stackwatch.config.AnalysisProperties;
 import com.stackwatch.domain.AnalysisPath;
 import com.stackwatch.domain.AnalysisResult;
+import com.stackwatch.domain.AntiPattern;
 import com.stackwatch.domain.ErrorCluster;
 import com.stackwatch.domain.ErrorEvent;
 import com.stackwatch.domain.RootCauseAnalysis;
+import com.stackwatch.domain.ReviewLevel;
+import com.stackwatch.feedback.AntiPatternRepository;
 import com.stackwatch.feedback.FewShotRepository;
 import com.stackwatch.metrics.AnalysisMetrics;
 import com.stackwatch.preprocess.EmbeddingService;
 import com.stackwatch.preprocess.Fingerprinter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.core.io.ClassPathResource;
 
@@ -48,6 +52,7 @@ class ErrorAnalyzerUnitTest {
 
     private static final double SIMILARITY_THRESHOLD = 0.92;
     private static final double CONFIDENCE_THRESHOLD = 0.6;
+    private static final double CONFIDENCE_HIGH_THRESHOLD = 0.9;
     private static final int FINGERPRINT_TOP_N = 5;
 
     private EmbeddingService embeddingService;
@@ -55,6 +60,7 @@ class ErrorAnalyzerUnitTest {
     private ClusterRepository clusterRepository;
     private ChatClient chatClient;
     private AnalysisTools analysisTools;
+    private AntiPatternRepository antiPatternRepository;
 
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec callSpec;
@@ -71,6 +77,8 @@ class ErrorAnalyzerUnitTest {
         AnalysisMetrics metrics = mock(AnalysisMetrics.class);
         FewShotRepository fewShotRepository = mock(FewShotRepository.class);
         when(fewShotRepository.findByExceptionType(anyString(), anyInt())).thenReturn(List.of());
+        antiPatternRepository = mock(AntiPatternRepository.class);
+        when(antiPatternRepository.findByExceptionType(anyString(), anyInt())).thenReturn(List.of());
 
         // ChatClient 链式 mock：prompt -> user -> tools -> call -> entity
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
@@ -82,14 +90,14 @@ class ErrorAnalyzerUnitTest {
 
         Fingerprinter fingerprinter = new Fingerprinter(FINGERPRINT_TOP_N);
         AnalysisProperties properties = new AnalysisProperties(
-            SIMILARITY_THRESHOLD, CONFIDENCE_THRESHOLD, FINGERPRINT_TOP_N);
+            SIMILARITY_THRESHOLD, CONFIDENCE_THRESHOLD, CONFIDENCE_HIGH_THRESHOLD, FINGERPRINT_TOP_N);
         PromptTemplateHolder promptTemplate = new PromptTemplateHolder(
             new ClassPathResource("prompts/root-cause.st"));
 
         errorAnalyzer = new ErrorAnalyzer(
             fingerprinter, embeddingService, fingerprintCache,
             clusterRepository, chatClient, analysisTools,
-            properties, promptTemplate, metrics, fewShotRepository);
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository);
     }
 
     @Test
@@ -191,6 +199,147 @@ class ErrorAnalyzerUnitTest {
         assertTrue(result.analysis().needHumanReview());
         verify(clusterRepository).save(any(ErrorCluster.class));
         verify(fingerprintCache).put(anyString(), any());
+    }
+
+    // ===== 复核级别三档门控测试（借鉴 PagePilot 置信度分档） =====
+
+    @Test
+    void l3HighConfidenceClassifiedAutoConfirmed() {
+        float[] vec = {0.1f, 0.2f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(highConfidenceRca());
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(ReviewLevel.AUTO_CONFIRMED, result.reviewLevel());
+        assertFalse(result.analysis().needHumanReview());
+    }
+
+    @Test
+    void l3MidConfidenceClassifiedNeedsConfirmation() {
+        float[] vec = {0.1f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        RootCauseAnalysis midConfRca = new RootCauseAnalysis(
+            "可能的根因", "空指针", "MEDIUM", 0.7,
+            "建议加空判断", List.of("OrderService.java:42"), false);
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(midConfRca);
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(ReviewLevel.NEEDS_CONFIRMATION, result.reviewLevel());
+        assertTrue(result.analysis().needHumanReview());
+    }
+
+    @Test
+    void l3LowConfidenceClassifiedNeedsHumanReview() {
+        float[] vec = {0.1f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        RootCauseAnalysis lowConfRca = new RootCauseAnalysis(
+            "不确定的根因", "UNKNOWN", "MEDIUM", 0.3,
+            "需进一步排查", List.of("OrderService.java:42"), false);
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(lowConfRca);
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(ReviewLevel.NEEDS_HUMAN_REVIEW, result.reviewLevel());
+        assertTrue(result.analysis().needHumanReview());
+    }
+
+    @Test
+    void l3HighConfidenceWithoutEvidenceClassifiedNeedsHumanReview() {
+        float[] vec = {0.1f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        RootCauseAnalysis noEvidenceRca = new RootCauseAnalysis(
+            "猜测的根因", "空指针", "HIGH", 0.95,
+            "建议排查", List.of(), false);
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(noEvidenceRca);
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(ReviewLevel.NEEDS_HUMAN_REVIEW, result.reviewLevel());
+        assertTrue(result.analysis().needHumanReview());
+    }
+
+    @Test
+    void l3LlmFailureClassifiedNeedsHumanReview() {
+        float[] vec = {0.1f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        when(callSpec.entity(RootCauseAnalysis.class))
+            .thenThrow(new RuntimeException("LLM unavailable"));
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(ReviewLevel.NEEDS_HUMAN_REVIEW, result.reviewLevel());
+        assertEquals(0.0, result.analysis().confidence());
+        assertTrue(result.analysis().needHumanReview());
+    }
+
+    @Test
+    void l1CacheHitInheritsAutoConfirmedFromHistory() {
+        RootCauseAnalysis cached = highConfidenceRca();
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.of(cached));
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.CACHE_HIT, result.path());
+        assertEquals(ReviewLevel.AUTO_CONFIRMED, result.reviewLevel());
+    }
+
+    @Test
+    void l1CacheHitWithReviewFlagInheritsNeedsHumanReview() {
+        RootCauseAnalysis cached = new RootCauseAnalysis(
+            "历史低置信根因", "UNKNOWN", "HIGH", 0.2,
+            "建议人工排查", List.of(), true);
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.of(cached));
+
+        AnalysisResult result = errorAnalyzer.analyze(npeEvent());
+
+        assertEquals(AnalysisPath.CACHE_HIT, result.path());
+        assertEquals(ReviewLevel.NEEDS_HUMAN_REVIEW, result.reviewLevel());
+    }
+
+    @Test
+    void l3InjectsAntiPatternsIntoPromptWhenAvailable() {
+        float[] vec = {0.1f};
+        when(fingerprintCache.lookup(anyString())).thenReturn(Optional.empty());
+        when(embeddingService.embed(any())).thenReturn(vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.empty());
+        AntiPattern ap = new AntiPattern(
+            "ap-1", "cluster-x", "NullPointerException",
+            "OrderService.process 调 length()", "误判为配置缺失", "实际是 order 字段未初始化",
+            Instant.parse("2026-07-10T08:00:00Z"));
+        when(antiPatternRepository.findByExceptionType(eq("NullPointerException"), anyInt()))
+            .thenReturn(List.of(ap));
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(highConfidenceRca());
+
+        errorAnalyzer.analyze(npeEvent());
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(requestSpec).user(promptCaptor.capture());
+        String promptText = promptCaptor.getValue();
+        assertTrue(promptText.contains("误判为配置缺失"), "prompt 应包含 anti-pattern 的误判根因警示");
+        assertTrue(promptText.contains("实际是 order 字段未初始化"), "prompt 应包含 anti-pattern 的正确根因");
     }
 
     private ErrorEvent npeEvent() {
