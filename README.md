@@ -21,6 +21,7 @@ StackWatch feeds production exception stack traces to an LLM for root cause loca
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Current Status](#current-status)
+- [Recent Highlights](#recent-highlights)
 - [Tech Stack](#tech-stack)
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
@@ -69,6 +70,13 @@ Beyond the cost ladder, the L3 path applies a **three-tier review gate** (inspir
 
 The feedback layer is a **bidirectional flywheel**: a developer confirms or corrects a root cause via `POST /feedback` -> a positive sample (few-shot, "answer this way") and, when `wrongRootCause` is present, a negative sample (anti-pattern, "don't answer that way"). Both are injected into the next L3 prompt--positive guides, negative warns. This is PagePilot's `known-failures` idea applied to the negative side, pairing with the few-shot positive side for a complete self-learning loop.
 
+### Context optimization & semantic caching
+
+Two defenses sit in front of the LLM to keep prompts lean and the token bill down:
+
+- **Semantic caching (L2)**. L2 is a semantic cache, not just an approximate merge: a new error whose embedding is ≥ 0.92 similar to an existing cluster returns that cluster's root cause with zero LLM call. On hit, the result is **back-filled into L1**, so subsequent identical fingerprints resolve at L1 -- the cache gradient is self-reinforcing. This is the ideal scenario for RCA, where one root cause surfaces as many stack-trace instances with different literals.
+- **Context optimization**. `ContextOptimizer` truncates the prompt vars (`exceptionMessage`, `mdc`) and every `@Tool` return value before they reach the LLM. Production exception messages can carry full SQL / response bodies, and `queryTraceContext` against SkyWalking/ARMS can return tens of thousands of characters per trace -- without this gate the context window blows up and hallucination risk rises. Thresholds are configurable via `stackwatch.context-optimizer.*`.
+
 ## Requirements
 
 - **JDK 21+** — required by Spring Boot 4.1 + Spring AI 2.0 (Java 8/11/17 not supported)
@@ -94,18 +102,25 @@ curl -X POST http://localhost:8080/analyze \
 ```
 
 ## Current Status
-
-MVP — the core analysis pipeline works; several modules are pending integration.
+MVP - the full five-layer pipeline + two cross-cutting layers are implemented; L2 / Kafka are off by default and unlock via config.
 
 | Layer | Status |
 |-------|--------|
 | Domain data structures (immutable records) | ✅ Done |
-| ② Preprocessor — fingerprint generation (SHA-256 + framework-frame filtering + versioning) | ✅ Done |
-| ③ Analyzer — L1 cache (Caffeine) + L3 LLM root cause (structured output + Function Calling) | ✅ Done |
-| L2 vector merge — interface defined, pending PgVector integration | 🚧 Pending |
-| ① Collector — pending Kafka / Logback Appender integration | 🚧 Pending |
-| ④ ⑤ Aggregator / Notifier — pending Feishu weekly report | 🚧 Pending |
-| Cross-cutting A/B — Micrometer metrics + bidirectional feedback flywheel (few-shot + anti-pattern) | ✅ Done |
+| ② Preprocessor - fingerprint generation (SHA-256 + framework-frame filtering + versioning) | ✅ Done |
+| ③ Analyzer - L1 cache + L2 vector merge + L3 LLM root cause (structured output + Function Calling) | ✅ Done |
+| Context optimization - ContextOptimizer (truncate prompt vars & @Tool returns) | ✅ Done |
+| ① Collector - Logback Appender + HTTP + Kafka (off by default, progressive unlock) | ✅ Done |
+| ④ ⑤ Aggregator / Notifier - real-time surge detection + Feishu weekly report | ✅ Done |
+| Cross-cutting A/B - Micrometer metrics + bidirectional feedback flywheel (few-shot + anti-pattern) | ✅ Done |
+
+## Recent Highlights
+
+- **Context optimization layer** (`ContextOptimizer`) - truncates prompt vars (`exceptionMessage` / `mdc`) and `@Tool` returns before the LLM, preventing context-window blow-up once real data sources (SkyWalking/ARMS) are wired in.
+- **Semantic caching** - L2 returns a historical root cause on embedding similarity ≥ 0.92 with zero tokens, and back-fills L1 on hit.
+- **Three-tier review gate** (`AUTO_CONFIRMED` / `NEEDS_CONFIRMATION` / `NEEDS_HUMAN_REVIEW`) - confidence + evidence gating, inspired by PagePilot.
+- **Bidirectional feedback flywheel** - few-shot positive samples + anti-pattern negative samples ("answer this way" / "don't answer that way"), both injected into the next L3 prompt.
+- **Stack upgrade** - JDK 21 + Spring Boot 4.1 + Spring AI 2.0.
 
 ## Tech Stack
 
@@ -113,8 +128,11 @@ MVP — the core analysis pipeline works; several modules are pending integratio
 |------|--------|
 | Framework | Spring Boot 4.1 + Java 21 |
 | LLM | Spring AI 2.0 (OpenAI-compatible; DashScope/DeepSeek switchable) |
-| L1 cache | Caffeine |
-| L2 vectors | PgVector (pending integration) |
+| L1 cache | Caffeine (Redis for production) |
+| L2 vectors | PgVector (off by default, progressive unlock) |
+| Messaging | Kafka (collector's third entry, off by default) |
+| Resilience | Resilience4j |
+| Metrics | Micrometer + Prometheus |
 
 ## Acknowledgments
 

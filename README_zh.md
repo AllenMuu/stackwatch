@@ -21,6 +21,7 @@
 - [环境要求](#环境要求)
 - [快速开始](#快速开始)
 - [当前状态](#当前状态)
+- [近期亮点](#近期亮点)
 - [技术栈](#技术栈)
 - [开源致谢](#开源致谢)
 - [许可证](#许可证)
@@ -69,6 +70,13 @@ flowchart TD
 
 反馈层是**正负双向飞轮**：研发通过 `POST /feedback` 确认或纠正根因 -> 正样本（few-shot，「该这么答」）+ 当携带 `wrongRootCause` 时负样本（anti-pattern，「别这么答」）。两者都注入下一次 L3 prompt--正样本引导、负样本警示。这是 PagePilot `known-failures` 思想在负样本侧的落地，与 few-shot 正样本侧对偶，构成完整自学习闭环。
 
+### 上下文优化与语义缓存
+
+LLM 前置两道防线，保持 Prompt 精简、压住 token 账单：
+
+- **语义缓存（L2）**。L2 不只是近似归并，本质是语义缓存：新错误 embedding 与已有簇相似度 ≥ 0.92 时，直接返回该簇的根因，零 LLM 调用。命中后结果**反向填充 L1**，后续相同指纹在 L1 直接命中--缓存梯度自洽。这对 RCA 是理想场景：同一根因会以大量字面不同但语义相同的堆栈实例反复出现。
+- **上下文优化**。`ContextOptimizer` 在 Prompt 入参（`exceptionMessage`、`mdc`）与每个 `@Tool` 返回值进入 LLM 前做截断。生产异常 message 可能携带完整 SQL / 响应体，`queryTraceContext` 接 SkyWalking/ARMS 后单 trace 日志可达数万字符--没有这道闸，上下文窗口易爆满、幻觉风险上升。阈值走 `stackwatch.context-optimizer.*` 配置。
+
 ## 环境要求
 
 - **JDK 21+** - Spring Boot 4.1 + Spring AI 2.0 强制要求（不支持 Java 8/11/17）
@@ -93,18 +101,25 @@ curl -X POST http://localhost:8080/analyze \
 ```
 
 ## 当前状态
-
-MVP 阶段 - 核心分析链路已通，部分模块待接入。
+MVP 阶段 - 五层主链路 + 两层横切均已实现；L2 / Kafka 默认关闭，按配置解锁。
 
 | 层 | 状态 |
 |----|------|
 | domain 数据结构（不可变 record） | ✅ 已完成 |
 | ② 预处理层 - 指纹生成（SHA-256 + 框架帧过滤 + 版本化） | ✅ 已完成 |
-| ③ 分析层 - L1 缓存（Caffeine）+ L3 LLM 根因（结构化输出 + Function Calling） | ✅ 已完成 |
-| L2 向量归并 - 接口已定义，待接入 PgVector | 🚧 待接入 |
-| ① 采集层 - 待接入 Kafka / Logback Appender | 🚧 待接入 |
-| ④ ⑤ 聚合层 / 投递层 - 待实现飞书周报 | 🚧 待接入 |
+| ③ 分析层 - L1 缓存 + L2 向量归并 + L3 LLM 根因（结构化输出 + Function Calling） | ✅ 已完成 |
+| 上下文优化 - ContextOptimizer（截断 Prompt 入参与 @Tool 返回值） | ✅ 已完成 |
+| ① 采集层 - Logback Appender + HTTP + Kafka（默认关闭，渐进式解锁） | ✅ 已完成 |
+| ④ ⑤ 聚合层 / 投递层 - 实时激增检测 + 飞书周报 | ✅ 已完成 |
 | 横切 A/B - Micrometer 度量 + 正负双向反馈飞轮（few-shot + anti-pattern） | ✅ 已完成 |
+
+## 近期亮点
+
+- **上下文优化层**（`ContextOptimizer`）- 在 LLM 前截断 Prompt 入参（`exceptionMessage` / `mdc`）与 `@Tool` 返回值，防止接入真实数据源（SkyWalking/ARMS）后上下文窗口爆满。
+- **语义缓存** - L2 在 embedding 相似度 ≥ 0.92 时零 token 返回历史根因，命中后反向填充 L1。
+- **三档复核门控**（`AUTO_CONFIRMED` / `NEEDS_CONFIRMATION` / `NEEDS_HUMAN_REVIEW`）- 置信度 + 证据双判，借鉴 PagePilot。
+- **正负双向反馈飞轮** - few-shot 正样本 + anti-pattern 负样本（「该这么答」/「别这么答」），均注入下一次 L3 prompt。
+- **技术栈升级** - JDK 21 + Spring Boot 4.1 + Spring AI 2.0。
 
 ## 技术栈
 
@@ -112,8 +127,11 @@ MVP 阶段 - 核心分析链路已通，部分模块待接入。
 |------|------|
 | 框架 | Spring Boot 4.1 + Java 21 |
 | LLM | Spring AI 2.0（OpenAI 兼容协议，DashScope/DeepSeek 可切换） |
-| L1 缓存 | Caffeine |
-| L2 向量 | PgVector（待接入） |
+| L1 缓存 | Caffeine（生产可换 Redis） |
+| L2 向量 | PgVector（默认关闭，渐进式解锁） |
+| 消息队列 | Kafka（采集层第三入口，默认关闭） |
+| 弹性 | Resilience4j |
+| 度量 | Micrometer + Prometheus |
 
 ## 开源致谢
 
