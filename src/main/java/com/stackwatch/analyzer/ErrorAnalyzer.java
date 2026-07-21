@@ -69,6 +69,7 @@ public class ErrorAnalyzer {
     private final AnalysisMetrics metrics;
     private final FewShotRepository fewShotRepository;
     private final AntiPatternRepository antiPatternRepository;
+    private final ContextOptimizer contextOptimizer;
 
     public ErrorAnalyzer(Fingerprinter fingerprinter,
                          EmbeddingService embeddingService,
@@ -80,7 +81,8 @@ public class ErrorAnalyzer {
                          PromptTemplateHolder promptTemplate,
                          AnalysisMetrics metrics,
                          FewShotRepository fewShotRepository,
-                         AntiPatternRepository antiPatternRepository) {
+                         AntiPatternRepository antiPatternRepository,
+                         ContextOptimizer contextOptimizer) {
         this.fingerprinter = fingerprinter;
         this.embeddingService = embeddingService;
         this.fingerprintCache = fingerprintCache;
@@ -92,6 +94,7 @@ public class ErrorAnalyzer {
         this.metrics = metrics;
         this.fewShotRepository = fewShotRepository;
         this.antiPatternRepository = antiPatternRepository;
+        this.contextOptimizer = contextOptimizer;
     }
 
     public AnalysisResult analyze(ErrorEvent event) {
@@ -169,7 +172,9 @@ public class ErrorAnalyzer {
         vars.put("historicalSamples", historicalSamples);
         vars.put("antiPatterns", antiPatterns);
 
-        String promptText = promptTemplate.render(vars);
+        // 上下文优化：截断 exceptionMessage / mdc 等体积不可控字段，防 Prompt 爆窗口 + 幻觉
+        Map<String, Object> optimizedVars = contextOptimizer.optimizePromptVars(vars);
+        String promptText = promptTemplate.render(optimizedVars);
         try {
             return chatClient.prompt()
                 .user(promptText)

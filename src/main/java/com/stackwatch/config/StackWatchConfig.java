@@ -17,7 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties({AnalysisProperties.class, CacheProperties.class, FeishuProperties.class})
+@EnableConfigurationProperties({AnalysisProperties.class, CacheProperties.class, ContextOptimizerProperties.class, FeishuProperties.class})
 public class StackWatchConfig {
 
     @Bean

@@ -1,6 +1,7 @@
 package com.stackwatch.analyzer;
 
 import com.stackwatch.config.AnalysisProperties;
+import com.stackwatch.config.ContextOptimizerProperties;
 import com.stackwatch.domain.AnalysisPath;
 import com.stackwatch.domain.AnalysisResult;
 import com.stackwatch.domain.AntiPattern;
@@ -94,10 +95,13 @@ class ErrorAnalyzerUnitTest {
         PromptTemplateHolder promptTemplate = new PromptTemplateHolder(
             new ClassPathResource("prompts/root-cause.st"));
 
+        ContextOptimizer contextOptimizer = new ContextOptimizer(
+            new ContextOptimizerProperties(2000, 1000, 4000));
         errorAnalyzer = new ErrorAnalyzer(
             fingerprinter, embeddingService, fingerprintCache,
             clusterRepository, chatClient, analysisTools,
-            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository);
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository,
+            contextOptimizer);
     }
 
     @Test
