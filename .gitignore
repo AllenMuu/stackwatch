@@ -10,7 +10,7 @@ build/
 *.ipr
 .vscode/
 .settings/
-.project
+.project/
 .classpath
 
 # OS
@@ -32,3 +32,9 @@ application-secret.yml
 
 # Claude Code（opsx 命令/skills 团队共享；本地设置不入库）
 .claude/settings.local.json
+
+# VitePress（文档站点）
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+test-results/
