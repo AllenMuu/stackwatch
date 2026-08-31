@@ -188,7 +188,7 @@ class PostgresIncidentRepositoryTest {
     }
 
     @Test
-    void rejectsReportEvidenceThatDoesNotMatchThePersistedEvidenceRecord() {
+    void rejectsReportEvidenceWithAMismatchedObservationReference() {
         Incident incident = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
         Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
@@ -197,7 +197,7 @@ class PostgresIncidentRepositoryTest {
         Evidence logs = persistedEvidence(incident.id(), step.id(), "LOGS", CREATED_AT.plusSeconds(3));
         Evidence trace = persistedEvidence(incident.id(), step.id(), "TRACE", CREATED_AT.plusSeconds(4));
         Evidence callerSuppliedLogs = new Evidence(
-            logs.id(), logs.incidentId(), logs.observationId(), "DEPLOYMENT", logs.redactedSummary(),
+            logs.id(), logs.incidentId(), UUID.randomUUID(), logs.sourceType(), logs.redactedSummary(),
             logs.provenance(), logs.observedFrom(), logs.observedTo(), logs.contentHash(), logs.createdAt());
         Hypothesis hypothesis = new Hypothesis(
             UUID.randomUUID(), incident.id(), "Downstream order service timed out", 0.9,
@@ -208,6 +208,32 @@ class PostgresIncidentRepositoryTest {
 
         assertThatIllegalArgumentException().isThrownBy(() -> repository.saveReport(report));
         assertThat(repository.findReport(incident.id())).isEmpty();
+    }
+
+    @Test
+    void savesReportWhenPostgresRoundsEvidenceTimestampsToMicroseconds() {
+        Incident incident = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
+        Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
+        InvestigationStep step = step(running.id(), CREATED_AT.plusSeconds(2));
+        repository.appendStep(step);
+        Evidence logs = persistedEvidence(
+            incident.id(), step.id(), "LOGS", CREATED_AT.plusSeconds(3).plusNanos(123_456));
+        Evidence trace = persistedEvidence(
+            incident.id(), step.id(), "TRACE", CREATED_AT.plusSeconds(4).plusNanos(654_321));
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), incident.id(), "Downstream order service timed out", 0.9,
+            List.of(logs, trace), CREATED_AT.plusSeconds(5));
+        IncidentReport report = IncidentReport.forInvestigation(
+            UUID.randomUUID(), incident.id(), List.of(hypothesis), List.of(logs, trace), List.of(),
+            "Inspect the downstream deployment", CREATED_AT.plusSeconds(6));
+
+        repository.saveReport(report);
+
+        IncidentReport loaded = repository.findReport(incident.id()).orElseThrow();
+        assertThat(loaded.reviewOutcome()).isEqualTo(IncidentStatus.COMPLETED);
+        assertThat(loaded.evidence()).allSatisfy(item ->
+            assertThat(item.createdAt().getNano() % 1_000).isZero());
     }
 
     @Test

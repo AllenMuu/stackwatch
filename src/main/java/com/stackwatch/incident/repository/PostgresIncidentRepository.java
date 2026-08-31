@@ -329,8 +329,9 @@ public class PostgresIncidentRepository implements IncidentRepository {
         Map<UUID, Evidence> evidenceById = new LinkedHashMap<>();
         for (Evidence callerSupplied : report.evidence()) {
             Evidence persisted = loadPersistedEvidence(report.incidentId(), callerSupplied.id());
-            if (!persisted.equals(callerSupplied)) {
-                throw new IllegalArgumentException("report evidence must match the persisted evidence record");
+            if (!hasSamePersistedReference(callerSupplied, persisted)) {
+                throw new IllegalArgumentException(
+                    "report evidence must retain its persisted observation reference");
             }
             evidenceById.put(persisted.id(), persisted);
         }
@@ -345,6 +346,12 @@ public class PostgresIncidentRepository implements IncidentRepository {
         return new IncidentReport(report.id(), report.incidentId(), authoritativeHypotheses,
             List.copyOf(evidenceById.values()), report.missingEvidence(), report.recommendation(),
             report.reviewOutcome(), report.createdAt());
+    }
+
+    private static boolean hasSamePersistedReference(Evidence callerSupplied, Evidence persisted) {
+        return callerSupplied.id().equals(persisted.id())
+            && callerSupplied.incidentId().equals(persisted.incidentId())
+            && callerSupplied.observationId().equals(persisted.observationId());
     }
 
     private Evidence loadPersistedEvidence(UUID incidentId, UUID evidenceId) {
