@@ -201,15 +201,17 @@ public class PostgresIncidentRepository implements IncidentRepository {
     @Override
     @Transactional
     public void saveReport(IncidentReport report) {
-        requirePersistedEvidence(report.incidentId(), report.evidence());
+        IncidentReport authoritativeReport = reportWithPersistedEvidence(report);
         jdbcTemplate.update("""
             DELETE FROM stackwatch_incident.hypothesis_evidence
             WHERE hypothesis_id IN (
                 SELECT id FROM stackwatch_incident.hypotheses WHERE incident_id = ?
             )
-            """, report.incidentId());
-        jdbcTemplate.update("DELETE FROM stackwatch_incident.hypotheses WHERE incident_id = ?", report.incidentId());
-        for (Hypothesis hypothesis : report.hypotheses()) {
+            """, authoritativeReport.incidentId());
+        jdbcTemplate.update(
+            "DELETE FROM stackwatch_incident.hypotheses WHERE incident_id = ?",
+            authoritativeReport.incidentId());
+        for (Hypothesis hypothesis : authoritativeReport.hypotheses()) {
             jdbcTemplate.update("""
                 INSERT INTO stackwatch_incident.hypotheses
                     (id, incident_id, statement, status, confidence, created_at)
@@ -223,7 +225,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
                     """, hypothesis.id(), citation.id());
             }
         }
-        jdbcTemplate.update("""
+        UUID persistedReportId = jdbcTemplate.queryForObject("""
             INSERT INTO stackwatch_incident.reports
                 (id, incident_id, recommendation, missing_evidence, review_outcome, created_at)
             VALUES (?, ?, ?, CAST(? AS jsonb), ?, ?)
@@ -232,9 +234,20 @@ public class PostgresIncidentRepository implements IncidentRepository {
                 missing_evidence = EXCLUDED.missing_evidence,
                 review_outcome = EXCLUDED.review_outcome,
                 created_at = EXCLUDED.created_at
-            """, report.id(), report.incidentId(), report.recommendation(),
-            toJson(report.missingEvidence()), report.reviewOutcome().name(), report.createdAt());
-        touchActivity(report.incidentId(), report.createdAt());
+            RETURNING id
+            """, (resultSet, rowNumber) -> uuid(resultSet, "id"), authoritativeReport.id(),
+            authoritativeReport.incidentId(), authoritativeReport.recommendation(),
+            toJson(authoritativeReport.missingEvidence()), authoritativeReport.reviewOutcome().name(),
+            authoritativeReport.createdAt());
+        jdbcTemplate.update(
+            "DELETE FROM stackwatch_incident.report_evidence WHERE report_id = ?", persistedReportId);
+        for (Evidence item : authoritativeReport.evidence()) {
+            jdbcTemplate.update("""
+                INSERT INTO stackwatch_incident.report_evidence (report_id, evidence_id)
+                VALUES (?, ?)
+                """, persistedReportId, item.id());
+        }
+        touchActivity(authoritativeReport.incidentId(), authoritativeReport.createdAt());
     }
 
     @Override
@@ -248,7 +261,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
             return Optional.empty();
         }
         ReportRow row = rows.getFirst();
-        List<Evidence> evidence = findEvidence(incidentId);
+        List<Evidence> evidence = findReportEvidence(row.id(), incidentId);
         IncidentReport report = new IncidentReport(row.id(), row.incidentId(),
             findHypotheses(incidentId, evidence), evidence, row.missingEvidence(), row.recommendation(),
             row.reviewOutcome(), row.createdAt());
@@ -312,10 +325,51 @@ public class PostgresIncidentRepository implements IncidentRepository {
         }
     }
 
-    private void requirePersistedEvidence(UUID incidentId, List<Evidence> evidence) {
-        for (Evidence item : evidence) {
-            requireOwnedRecord("evidence", item.id(), incidentId);
+    private IncidentReport reportWithPersistedEvidence(IncidentReport report) {
+        Map<UUID, Evidence> evidenceById = new LinkedHashMap<>();
+        for (Evidence callerSupplied : report.evidence()) {
+            Evidence persisted = loadPersistedEvidence(report.incidentId(), callerSupplied.id());
+            if (!persisted.equals(callerSupplied)) {
+                throw new IllegalArgumentException("report evidence must match the persisted evidence record");
+            }
+            evidenceById.put(persisted.id(), persisted);
         }
+        List<Hypothesis> authoritativeHypotheses = report.hypotheses().stream()
+            .map(hypothesis -> new Hypothesis(hypothesis.id(), hypothesis.incidentId(),
+                hypothesis.statement(), hypothesis.confidence(), hypothesis.citedEvidence().stream()
+                    .map(Evidence::id)
+                    .map(evidenceById::get)
+                    .map(item -> Objects.requireNonNull(item, "report citation is not persisted"))
+                    .toList(), hypothesis.createdAt()))
+            .toList();
+        return new IncidentReport(report.id(), report.incidentId(), authoritativeHypotheses,
+            List.copyOf(evidenceById.values()), report.missingEvidence(), report.recommendation(),
+            report.reviewOutcome(), report.createdAt());
+    }
+
+    private Evidence loadPersistedEvidence(UUID incidentId, UUID evidenceId) {
+        List<Evidence> rows = jdbcTemplate.query("""
+            SELECT id, incident_id, observation_id, source_type, redacted_summary, provenance,
+                   observed_from, observed_to, content_hash, created_at
+            FROM stackwatch_incident.evidence
+            WHERE id = ? AND incident_id = ?
+            """, evidenceRowMapper(), evidenceId, incidentId);
+        if (rows.size() != 1) {
+            throw new IllegalArgumentException("evidence record must belong to incident");
+        }
+        return rows.getFirst();
+    }
+
+    private List<Evidence> findReportEvidence(UUID reportId, UUID incidentId) {
+        return jdbcTemplate.query("""
+            SELECT evidence.id, evidence.incident_id, evidence.observation_id, evidence.source_type,
+                   evidence.redacted_summary, evidence.provenance, evidence.observed_from,
+                   evidence.observed_to, evidence.content_hash, evidence.created_at
+            FROM stackwatch_incident.report_evidence report_evidence
+            JOIN stackwatch_incident.evidence evidence ON evidence.id = report_evidence.evidence_id
+            WHERE report_evidence.report_id = ? AND evidence.incident_id = ?
+            ORDER BY evidence.created_at, evidence.id
+            """, evidenceRowMapper(), reportId, incidentId);
     }
 
     private List<IncidentTrigger> findTriggers(UUID incidentId) {

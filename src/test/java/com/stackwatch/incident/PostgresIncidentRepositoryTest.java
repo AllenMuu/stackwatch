@@ -16,6 +16,7 @@ import com.stackwatch.incident.domain.Observation;
 import com.stackwatch.incident.repository.PostgresIncidentRepository;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -125,6 +126,33 @@ class PostgresIncidentRepositoryTest {
     }
 
     @Test
+    @Timeout(10)
+    void concurrentStartIfPendingAllowsExactlyOneWorkerToClaimTheIncident() throws Exception {
+        Incident incident = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<Incident>> first = executor.submit(
+                () -> startAfterBarrier(incident.id(), ready, start));
+            Future<Optional<Incident>> second = executor.submit(
+                () -> startAfterBarrier(incident.id(), ready, start));
+
+            assertThat(ready.await(2, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            int claims = (first.get(5, TimeUnit.SECONDS).isPresent() ? 1 : 0)
+                + (second.get(5, TimeUnit.SECONDS).isPresent() ? 1 : 0);
+            assertThat(claims).isEqualTo(1);
+            assertThat(repository.findById(incident.id()).orElseThrow().status())
+                .isEqualTo(IncidentStatus.RUNNING);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void persistsCitedEvidenceLinksAndRetrievesTheStructuredReport() {
         Incident incident = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
@@ -148,6 +176,38 @@ class PostgresIncidentRepositoryTest {
             assertThat(saved.verificationStatus()).isEqualTo(Hypothesis.VerificationStatus.VERIFIED);
             assertThat(saved.citedEvidence()).containsExactlyInAnyOrder(logs, trace);
         });
+
+        Evidence deployment = persistedEvidence(
+            incident.id(), step.id(), "DEPLOYMENT", CREATED_AT.plusSeconds(7));
+        IncidentReport historical = repository.findReport(incident.id()).orElseThrow();
+
+        assertThat(historical.evidence()).containsExactlyInAnyOrder(logs, trace);
+        assertThat(historical.evidence()).doesNotContain(deployment);
+        assertThat(historical.hypotheses()).singleElement().satisfies(saved ->
+            assertThat(saved.citedEvidence()).containsExactlyInAnyOrder(logs, trace));
+    }
+
+    @Test
+    void rejectsReportEvidenceThatDoesNotMatchThePersistedEvidenceRecord() {
+        Incident incident = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
+        Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
+        InvestigationStep step = step(running.id(), CREATED_AT.plusSeconds(2));
+        repository.appendStep(step);
+        Evidence logs = persistedEvidence(incident.id(), step.id(), "LOGS", CREATED_AT.plusSeconds(3));
+        Evidence trace = persistedEvidence(incident.id(), step.id(), "TRACE", CREATED_AT.plusSeconds(4));
+        Evidence callerSuppliedLogs = new Evidence(
+            logs.id(), logs.incidentId(), logs.observationId(), "DEPLOYMENT", logs.redactedSummary(),
+            logs.provenance(), logs.observedFrom(), logs.observedTo(), logs.contentHash(), logs.createdAt());
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), incident.id(), "Downstream order service timed out", 0.9,
+            List.of(callerSuppliedLogs, trace), CREATED_AT.plusSeconds(5));
+        IncidentReport report = IncidentReport.forInvestigation(
+            UUID.randomUUID(), incident.id(), List.of(hypothesis), List.of(callerSuppliedLogs, trace), List.of(),
+            "Inspect the downstream deployment", CREATED_AT.plusSeconds(6));
+
+        assertThatIllegalArgumentException().isThrownBy(() -> repository.saveReport(report));
+        assertThat(repository.findReport(incident.id())).isEmpty();
     }
 
     @Test
@@ -200,6 +260,15 @@ class PostgresIncidentRepositoryTest {
         }
         return repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger(triggerType, triggerType, CREATED_AT));
+    }
+
+    private Optional<Incident> startAfterBarrier(UUID incidentId, CountDownLatch ready, CountDownLatch start)
+        throws InterruptedException {
+        ready.countDown();
+        if (!start.await(2, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("concurrent start barrier timed out");
+        }
+        return repository.startIfPending(incidentId, CREATED_AT.plusSeconds(1));
     }
 
     private Evidence persistedEvidence(UUID incidentId, UUID stepId, String sourceType, Instant createdAt) {
