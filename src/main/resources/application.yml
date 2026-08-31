@@ -17,6 +17,17 @@ spring:
     # 启用 Kafka：从 exclude 移除 KafkaAutoConfiguration + 确保 pom 含 spring-kafka + 配 broker
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
 
+  datasource:
+    # Incident 启用后由 StackWatchConfig 显式创建 DataSource；默认关闭时不会连接数据库。
+    url: ${INCIDENT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
+    username: ${INCIDENT_DATASOURCE_USERNAME:stackwatch}
+    password: ${INCIDENT_DATASOURCE_PASSWORD:}
+
+  flyway:
+    # 无 DataSource 时 Flyway 自动配置不会激活；Incident 启用时迁移仅管理此 schema。
+    schemas: stackwatch_incident
+    create-schemas: true
+
   ai:
     openai:
       # DashScope 兼容 OpenAI 协议；切换其他厂商只需改 base-url + model
@@ -48,6 +59,13 @@ stackwatch:
     # L2 默认关闭：false 时走 InMemoryClusterRepository（findSimilar 返回 empty 强制 L3）
     # 启用需：true + 从 exclude 移除前两项 + 配 datasource + 取消 embedding 注释
     enabled: false
+  incident:
+    # Deep Path 默认关闭，避免为既有 Fast Path 启动数据库或迁移。
+    enabled: false
+    max-steps: 6
+    max-tool-calls: 3
+    tool-call-timeout: 5s
+    total-timeout: 30s
   context-optimizer:
     # Prompt 异常消息字段截断上限（字符）；生产异常 message 可能含完整 SQL/响应体
     max-exception-message-length: 2000
