@@ -24,7 +24,8 @@ spring:
     password: ${INCIDENT_DATASOURCE_PASSWORD:}
 
   flyway:
-    # 无 DataSource 时 Flyway 自动配置不会激活；Incident 启用时迁移仅管理此 schema。
+    # 严格跟随 Incident 开关：即使 L2 提供了数据源，关闭 Incident 时也不得执行其迁移。
+    enabled: ${stackwatch.incident.enabled:false}
     schemas: stackwatch_incident
     create-schemas: true
 
