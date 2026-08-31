@@ -6,9 +6,9 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Candidate root cause whose confidence is governed by independent evidence sources. */
-public record Hypothesis(UUID id, UUID incidentId, String statement,
-                         VerificationStatus verificationStatus, Double confidence, Instant createdAt) {
+/** Candidate root cause whose verification status is derived from cited evidence. */
+public record Hypothesis(UUID id, UUID incidentId, String statement, Double confidence,
+                         List<Evidence> citedEvidence, Instant createdAt) {
 
     public enum VerificationStatus {
         VERIFIED,
@@ -20,26 +20,28 @@ public record Hypothesis(UUID id, UUID incidentId, String statement,
         id = Objects.requireNonNull(id, "id is required");
         incidentId = Objects.requireNonNull(incidentId, "incidentId is required");
         statement = requireText(statement, "statement");
-        verificationStatus = Objects.requireNonNull(verificationStatus, "verificationStatus is required");
+        citedEvidence = citedEvidence == null ? List.of() : List.copyOf(citedEvidence);
+        UUID ownerId = incidentId;
+        if (citedEvidence.stream().anyMatch(evidence -> !ownerId.equals(evidence.incidentId()))) {
+            throw new IllegalArgumentException("cited evidence must belong to hypothesis incident");
+        }
         createdAt = Objects.requireNonNull(createdAt, "createdAt is required");
     }
 
-    public static Hypothesis assess(UUID id, UUID incidentId, String statement, Double confidence,
-                                    List<Evidence> evidence, Instant createdAt) {
-        long independentSources = (evidence == null ? List.<Evidence>of() : evidence).stream()
-            .filter(item -> incidentId.equals(item.incidentId()))
+    public VerificationStatus verificationStatus() {
+        long independentSources = citedEvidence.stream()
             .map(Evidence::sourceType)
             .map(source -> source.trim().toLowerCase(Locale.ROOT))
             .distinct()
             .count();
-        VerificationStatus status = independentSources >= 2
-            ? VerificationStatus.VERIFIED
-            : independentSources == 1 ? VerificationStatus.PROVISIONAL : VerificationStatus.UNKNOWN;
-        return new Hypothesis(id, incidentId, statement, status, confidence, createdAt);
+        if (independentSources >= 2) {
+            return VerificationStatus.VERIFIED;
+        }
+        return independentSources == 1 ? VerificationStatus.PROVISIONAL : VerificationStatus.UNKNOWN;
     }
 
     public boolean needsHumanReview() {
-        return verificationStatus != VerificationStatus.VERIFIED;
+        return verificationStatus() != VerificationStatus.VERIFIED;
     }
 
     private static String requireText(String value, String name) {

@@ -1,6 +1,7 @@
 package com.stackwatch.incident;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -77,7 +78,7 @@ class IncidentDomainTest {
             evidence(incidentId, "LOGS", "timeout started"),
             evidence(incidentId, "TRACE", "downstream timeout"));
 
-        Hypothesis hypothesis = Hypothesis.assess(
+        Hypothesis hypothesis = new Hypothesis(
             UUID.randomUUID(), incidentId, "Order service timed out after deployment", 0.9, evidence, CREATED_AT);
         IncidentReport report = IncidentReport.forInvestigation(
             UUID.randomUUID(), incidentId, List.of(hypothesis), evidence, List.of(),
@@ -95,10 +96,10 @@ class IncidentDomainTest {
         Evidence firstLog = evidence(incidentId, "LOGS", "timeout started");
         Evidence secondLog = evidence(incidentId, "LOGS", "retry exhausted");
 
-        Hypothesis provisional = Hypothesis.assess(
+        Hypothesis provisional = new Hypothesis(
             UUID.randomUUID(), incidentId, "Order service timed out", 0.7,
             List.of(firstLog, secondLog), CREATED_AT);
-        Hypothesis unknown = Hypothesis.assess(
+        Hypothesis unknown = new Hypothesis(
             UUID.randomUUID(), incidentId, "Deployment changed behavior", 0.2, List.of(), CREATED_AT);
         IncidentReport report = IncidentReport.forInvestigation(
             UUID.randomUUID(), incidentId, List.of(provisional, unknown), List.of(firstLog, secondLog),
@@ -106,6 +107,51 @@ class IncidentDomainTest {
 
         assertThat(provisional.verificationStatus()).isEqualTo(Hypothesis.VerificationStatus.PROVISIONAL);
         assertThat(unknown.verificationStatus()).isEqualTo(Hypothesis.VerificationStatus.UNKNOWN);
+        assertThat(report.reviewOutcome()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
+        assertThat(report.requiresHumanReview()).isTrue();
+    }
+
+    @Test
+    void constructionForcesUnknownAndHumanReviewWhenEvidenceIsEmpty() {
+        UUID incidentId = UUID.randomUUID();
+        Hypothesis unknown = new Hypothesis(
+            UUID.randomUUID(), incidentId, "Deployment changed behavior", 0.9, List.of(), CREATED_AT);
+
+        IncidentReport report = new IncidentReport(
+            UUID.randomUUID(), incidentId, List.of(unknown), List.of(), List.of("Logs"),
+            "Inspect the deployment", IncidentStatus.COMPLETED, CREATED_AT.plusSeconds(1));
+
+        assertThat(unknown.verificationStatus()).isEqualTo(Hypothesis.VerificationStatus.UNKNOWN);
+        assertThat(report.reviewOutcome()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
+    }
+
+    @Test
+    void reportRejectsHypothesisCitationThatIsNotInItsEvidenceSet() {
+        UUID incidentId = UUID.randomUUID();
+        Evidence logs = evidence(incidentId, "LOGS", "timeout started");
+        Evidence trace = evidence(incidentId, "TRACE", "downstream timeout");
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), incidentId, "Order service timed out", 0.9,
+            List.of(logs, trace), CREATED_AT);
+
+        assertThatIllegalArgumentException().isThrownBy(() -> new IncidentReport(
+            UUID.randomUUID(), incidentId, List.of(hypothesis), List.of(logs), List.of(),
+            "Inspect downstream", IncidentStatus.COMPLETED, CREATED_AT.plusSeconds(1)));
+    }
+
+    @Test
+    void verifiedEvidenceMayStillBeExplicitlyRoutedToHumanReview() {
+        UUID incidentId = UUID.randomUUID();
+        Evidence logs = evidence(incidentId, "LOGS", "timeout started");
+        Evidence trace = evidence(incidentId, "TRACE", "downstream timeout");
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), incidentId, "Order service timed out", 0.9,
+            List.of(logs, trace), CREATED_AT);
+
+        IncidentReport report = new IncidentReport(
+            UUID.randomUUID(), incidentId, List.of(hypothesis), List.of(logs, trace), List.of(),
+            "Inspect downstream", IncidentStatus.NEEDS_HUMAN_REVIEW, CREATED_AT.plusSeconds(1));
+
         assertThat(report.reviewOutcome()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
         assertThat(report.requiresHumanReview()).isTrue();
     }

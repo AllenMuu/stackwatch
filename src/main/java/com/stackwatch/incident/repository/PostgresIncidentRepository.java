@@ -15,7 +15,10 @@ import com.stackwatch.incident.domain.Observation;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -29,7 +32,6 @@ import org.springframework.transaction.annotation.Transactional;
 @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
 public class PostgresIncidentRepository implements IncidentRepository {
 
-    private static final String SCHEMA = "stackwatch_incident";
     private static final String STALE_FAILURE_REASON =
         "Investigation was marked stale and failed after process restart";
 
@@ -42,8 +44,8 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     /**
-     * PostgreSQL advisory locking serializes each active identity. The partial unique index then remains
-     * the final database guard, while a transaction ensures a reused incident receives its trigger.
+     * PostgreSQL advisory locking serializes each active identity. The partial unique index remains the
+     * final database guard, and one transaction preserves both the trigger append and activity timestamp.
      */
     @Override
     @Transactional
@@ -57,6 +59,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
         if (existing.isPresent()) {
             Incident incident = existing.orElseThrow();
             insertTrigger(incident.id(), trigger);
+            touchActivity(incident.id(), trigger.createdAt());
             return findById(incident.id()).orElseThrow();
         }
 
@@ -89,20 +92,46 @@ public class PostgresIncidentRepository implements IncidentRepository {
         return Optional.of(row.toIncident(findTriggers(incidentId), findSteps(incidentId)));
     }
 
+    /** Atomically claims one pending incident for a worker; all other callers observe an empty result. */
     @Override
-    public void update(Incident incident) {
+    @Transactional
+    public Optional<Incident> startIfPending(UUID incidentId, Instant startedAt) {
+        Objects.requireNonNull(incidentId, "incidentId is required");
+        Objects.requireNonNull(startedAt, "startedAt is required");
         int updated = jdbcTemplate.update("""
             UPDATE stackwatch_incident.incidents
-            SET status = ?, updated_at = ?, started_at = ?, completed_at = ?, failure_reason = ?
-            WHERE id = ?
-            """, incident.status().name(), incident.updatedAt(), incident.startedAt(),
-            incident.completedAt(), incident.failureReason(), incident.id());
-        if (updated != 1) {
-            throw new IllegalArgumentException("incident does not exist: " + incident.id());
+            SET status = ?, started_at = ?, updated_at = GREATEST(updated_at, ?),
+                completed_at = NULL, failure_reason = NULL
+            WHERE id = ? AND status = ?
+            """, IncidentStatus.RUNNING.name(), startedAt, startedAt, incidentId,
+            IncidentStatus.PENDING.name());
+        return updated == 1 ? findById(incidentId) : Optional.empty();
+    }
+
+    /**
+     * Persists a terminal lifecycle transition only when the stored status still matches the caller's
+     * expected state. This prevents stale workers from reviving or overwriting a completed incident.
+     */
+    @Override
+    @Transactional
+    public boolean updateIfCurrentStatus(Incident incident, IncidentStatus expectedStatus) {
+        Objects.requireNonNull(incident, "incident is required");
+        Objects.requireNonNull(expectedStatus, "expectedStatus is required");
+        if (!expectedStatus.canTransitionTo(incident.status())) {
+            throw new IllegalArgumentException(
+                "invalid persisted transition from " + expectedStatus + " to " + incident.status());
         }
+        return jdbcTemplate.update("""
+            UPDATE stackwatch_incident.incidents
+            SET status = ?, updated_at = GREATEST(updated_at, ?), started_at = ?, completed_at = ?,
+                failure_reason = ?
+            WHERE id = ? AND status = ?
+            """, incident.status().name(), incident.updatedAt(), incident.startedAt(),
+            incident.completedAt(), incident.failureReason(), incident.id(), expectedStatus.name()) == 1;
     }
 
     @Override
+    @Transactional
     public void appendStep(InvestigationStep step) {
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.steps
@@ -111,10 +140,15 @@ public class PostgresIncidentRepository implements IncidentRepository {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, step.id(), step.incidentId(), step.sequenceNumber(), step.decision().decisionType(),
             step.decision().summary(), step.decision().toolset(), step.outcome(), step.createdAt());
+        touchActivity(step.incidentId(), step.createdAt());
     }
 
     @Override
+    @Transactional
     public void appendObservation(Observation observation) {
+        if (observation.stepId() != null) {
+            requireOwnedRecord("steps", observation.stepId(), observation.incidentId());
+        }
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.observations
                 (id, incident_id, step_id, source_type, status, redacted_summary, provenance,
@@ -124,10 +158,13 @@ public class PostgresIncidentRepository implements IncidentRepository {
             observation.status(), observation.redactedSummary(), observation.provenance(),
             observation.observedFrom(), observation.observedTo(), observation.contentHash(),
             observation.createdAt());
+        touchActivity(observation.incidentId(), observation.createdAt());
     }
 
     @Override
+    @Transactional
     public void appendEvidence(Evidence evidence) {
+        requireOwnedRecord("observations", evidence.observationId(), evidence.incidentId());
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.evidence
                 (id, incident_id, observation_id, source_type, redacted_summary, provenance,
@@ -136,6 +173,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
             """, evidence.id(), evidence.incidentId(), evidence.observationId(), evidence.sourceType(),
             evidence.redactedSummary(), evidence.provenance(), evidence.observedFrom(), evidence.observedTo(),
             evidence.contentHash(), evidence.createdAt());
+        touchActivity(evidence.incidentId(), evidence.createdAt());
     }
 
     @Override
@@ -163,6 +201,13 @@ public class PostgresIncidentRepository implements IncidentRepository {
     @Override
     @Transactional
     public void saveReport(IncidentReport report) {
+        requirePersistedEvidence(report.incidentId(), report.evidence());
+        jdbcTemplate.update("""
+            DELETE FROM stackwatch_incident.hypothesis_evidence
+            WHERE hypothesis_id IN (
+                SELECT id FROM stackwatch_incident.hypotheses WHERE incident_id = ?
+            )
+            """, report.incidentId());
         jdbcTemplate.update("DELETE FROM stackwatch_incident.hypotheses WHERE incident_id = ?", report.incidentId());
         for (Hypothesis hypothesis : report.hypotheses()) {
             jdbcTemplate.update("""
@@ -171,6 +216,12 @@ public class PostgresIncidentRepository implements IncidentRepository {
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, hypothesis.id(), hypothesis.incidentId(), hypothesis.statement(),
                 hypothesis.verificationStatus().name(), hypothesis.confidence(), hypothesis.createdAt());
+            for (Evidence citation : hypothesis.citedEvidence()) {
+                jdbcTemplate.update("""
+                    INSERT INTO stackwatch_incident.hypothesis_evidence (hypothesis_id, evidence_id)
+                    VALUES (?, ?)
+                    """, hypothesis.id(), citation.id());
+            }
         }
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.reports
@@ -183,24 +234,32 @@ public class PostgresIncidentRepository implements IncidentRepository {
                 created_at = EXCLUDED.created_at
             """, report.id(), report.incidentId(), report.recommendation(),
             toJson(report.missingEvidence()), report.reviewOutcome().name(), report.createdAt());
+        touchActivity(report.incidentId(), report.createdAt());
     }
 
     @Override
     public Optional<IncidentReport> findReport(UUID incidentId) {
-        List<IncidentReport> reports = jdbcTemplate.query("""
+        List<ReportRow> rows = jdbcTemplate.query("""
             SELECT id, incident_id, recommendation, missing_evidence, review_outcome, created_at
             FROM stackwatch_incident.reports
             WHERE incident_id = ?
-            """, (resultSet, rowNumber) -> new IncidentReport(
-                uuid(resultSet, "id"), uuid(resultSet, "incident_id"), findHypotheses(incidentId),
-                findEvidence(incidentId), fromJson(resultSet.getString("missing_evidence")),
-                resultSet.getString("recommendation"),
-                IncidentStatus.valueOf(resultSet.getString("review_outcome")),
-                instant(resultSet, "created_at")), incidentId);
-        return reports.stream().findFirst();
+            """, reportRowMapper(), incidentId);
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        ReportRow row = rows.getFirst();
+        List<Evidence> evidence = findEvidence(incidentId);
+        IncidentReport report = new IncidentReport(row.id(), row.incidentId(),
+            findHypotheses(incidentId, evidence), evidence, row.missingEvidence(), row.recommendation(),
+            row.reviewOutcome(), row.createdAt());
+        if (report.reviewOutcome() != row.reviewOutcome()) {
+            throw new IllegalStateException("persisted report review outcome violates the evidence gate");
+        }
+        return Optional.of(report);
     }
 
     @Override
+    @Transactional
     public int markStaleRunningFailed(Instant staleBefore, Instant now) {
         return jdbcTemplate.update("""
             UPDATE stackwatch_incident.incidents
@@ -233,6 +292,32 @@ public class PostgresIncidentRepository implements IncidentRepository {
             """, trigger.id(), incidentId, trigger.triggerType(), trigger.note(), trigger.createdAt());
     }
 
+    private void touchActivity(UUID incidentId, Instant activityAt) {
+        int touched = jdbcTemplate.update("""
+            UPDATE stackwatch_incident.incidents
+            SET updated_at = GREATEST(updated_at, ?)
+            WHERE id = ?
+            """, activityAt, incidentId);
+        if (touched != 1) {
+            throw new IllegalArgumentException("incident does not exist: " + incidentId);
+        }
+    }
+
+    private void requireOwnedRecord(String table, UUID recordId, UUID incidentId) {
+        List<UUID> owners = jdbcTemplate.query(
+            "SELECT incident_id FROM stackwatch_incident." + table + " WHERE id = ?",
+            (resultSet, rowNumber) -> uuid(resultSet, "incident_id"), recordId);
+        if (owners.size() != 1 || !incidentId.equals(owners.getFirst())) {
+            throw new IllegalArgumentException(table + " record must belong to incident");
+        }
+    }
+
+    private void requirePersistedEvidence(UUID incidentId, List<Evidence> evidence) {
+        for (Evidence item : evidence) {
+            requireOwnedRecord("evidence", item.id(), incidentId);
+        }
+    }
+
     private List<IncidentTrigger> findTriggers(UUID incidentId) {
         return jdbcTemplate.query("""
             SELECT id, trigger_type, note, created_at
@@ -258,16 +343,43 @@ public class PostgresIncidentRepository implements IncidentRepository {
                 resultSet.getString("outcome"), instant(resultSet, "created_at")), incidentId);
     }
 
-    private List<Hypothesis> findHypotheses(UUID incidentId) {
+    private List<Hypothesis> findHypotheses(UUID incidentId, List<Evidence> evidence) {
+        Map<UUID, Evidence> evidenceById = new LinkedHashMap<>();
+        for (Evidence item : evidence) {
+            evidenceById.put(item.id(), item);
+        }
         return jdbcTemplate.query("""
             SELECT id, incident_id, statement, status, confidence, created_at
             FROM stackwatch_incident.hypotheses
             WHERE incident_id = ?
             ORDER BY created_at, id
-            """, (resultSet, rowNumber) -> new Hypothesis(
+            """, (resultSet, rowNumber) -> {
+            HypothesisRow row = new HypothesisRow(
                 uuid(resultSet, "id"), uuid(resultSet, "incident_id"), resultSet.getString("statement"),
                 Hypothesis.VerificationStatus.valueOf(resultSet.getString("status")),
-                nullableDouble(resultSet, "confidence"), instant(resultSet, "created_at")), incidentId);
+                nullableDouble(resultSet, "confidence"), instant(resultSet, "created_at"));
+            Hypothesis hypothesis = new Hypothesis(row.id(), row.incidentId(), row.statement(), row.confidence(),
+                findCitedEvidence(row.id(), evidenceById), row.createdAt());
+            if (hypothesis.verificationStatus() != row.status()) {
+                throw new IllegalStateException("persisted hypothesis status violates the evidence gate");
+            }
+            return hypothesis;
+        }, incidentId);
+    }
+
+    private List<Evidence> findCitedEvidence(UUID hypothesisId, Map<UUID, Evidence> evidenceById) {
+        List<UUID> citedIds = jdbcTemplate.query("""
+            SELECT evidence_id
+            FROM stackwatch_incident.hypothesis_evidence
+            WHERE hypothesis_id = ?
+            ORDER BY evidence_id
+            """, (resultSet, rowNumber) -> uuid(resultSet, "evidence_id"), hypothesisId);
+        return citedIds.stream().map(evidenceById::get).map(item -> {
+            if (item == null) {
+                throw new IllegalStateException("hypothesis citation does not belong to its incident");
+            }
+            return item;
+        }).toList();
     }
 
     private static RowMapper<IncidentRow> incidentRowMapper() {
@@ -295,6 +407,13 @@ public class PostgresIncidentRepository implements IncidentRepository {
             resultSet.getString("provenance"), instant(resultSet, "observed_from"),
             instant(resultSet, "observed_to"), resultSet.getString("content_hash"),
             instant(resultSet, "created_at"));
+    }
+
+    private RowMapper<ReportRow> reportRowMapper() {
+        return (resultSet, rowNumber) -> new ReportRow(
+            uuid(resultSet, "id"), uuid(resultSet, "incident_id"), resultSet.getString("recommendation"),
+            fromJson(resultSet.getString("missing_evidence")),
+            IncidentStatus.valueOf(resultSet.getString("review_outcome")), instant(resultSet, "created_at"));
     }
 
     private String toJson(List<String> missingEvidence) {
@@ -339,5 +458,13 @@ public class PostgresIncidentRepository implements IncidentRepository {
             return new Incident(id, applicationName, environment, clusterId, status, triggers, steps,
                 createdAt, updatedAt, startedAt, completedAt, failureReason);
         }
+    }
+
+    private record HypothesisRow(UUID id, UUID incidentId, String statement,
+                                 Hypothesis.VerificationStatus status, Double confidence, Instant createdAt) {
+    }
+
+    private record ReportRow(UUID id, UUID incidentId, String recommendation, List<String> missingEvidence,
+                             IncidentStatus reviewOutcome, Instant createdAt) {
     }
 }

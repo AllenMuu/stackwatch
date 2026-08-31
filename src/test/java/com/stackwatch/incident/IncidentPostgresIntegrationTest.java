@@ -26,7 +26,8 @@ class IncidentPostgresIntegrationTest {
         try (var connection = postgres.createConnection("");
              var statement = connection.prepareStatement("SELECT to_regclass(?)")) {
             for (String table : new String[] {
-                "incidents", "triggers", "steps", "observations", "evidence", "hypotheses", "reports"
+                "incidents", "triggers", "steps", "observations", "evidence", "hypotheses",
+                "hypothesis_evidence", "reports"
             }) {
                 statement.setString(1, "stackwatch_incident." + table);
                 try (var result = statement.executeQuery()) {

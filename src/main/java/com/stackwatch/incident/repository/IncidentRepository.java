@@ -3,6 +3,7 @@ package com.stackwatch.incident.repository;
 import com.stackwatch.incident.domain.Evidence;
 import com.stackwatch.incident.domain.Incident;
 import com.stackwatch.incident.domain.IncidentReport;
+import com.stackwatch.incident.domain.IncidentStatus;
 import com.stackwatch.incident.domain.IncidentTrigger;
 import com.stackwatch.incident.domain.InvestigationStep;
 import com.stackwatch.incident.domain.Observation;
@@ -19,7 +20,9 @@ public interface IncidentRepository {
 
     Optional<Incident> findById(UUID incidentId);
 
-    void update(Incident incident);
+    Optional<Incident> startIfPending(UUID incidentId, Instant startedAt);
+
+    boolean updateIfCurrentStatus(Incident incident, IncidentStatus expectedStatus);
 
     void appendStep(InvestigationStep step);
 

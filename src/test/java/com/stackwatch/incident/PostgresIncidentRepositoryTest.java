@@ -1,6 +1,7 @@
 package com.stackwatch.incident;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stackwatch.incident.domain.AgentDecision;
@@ -16,10 +17,26 @@ import com.stackwatch.incident.repository.PostgresIncidentRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -34,85 +51,213 @@ class PostgresIncidentRepositoryTest {
 
     private PostgresIncidentRepository repository;
 
+    private JdbcTemplate jdbcTemplate;
+
+    private AnnotationConfigApplicationContext applicationContext;
+
     @BeforeEach
     void setUp() {
+        applicationContext = new AnnotationConfigApplicationContext(RepositoryTestConfiguration.class);
+        repository = applicationContext.getBean(PostgresIncidentRepository.class);
+        jdbcTemplate = applicationContext.getBean(JdbcTemplate.class);
         Flyway.configure()
             .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
             .schemas("stackwatch_incident")
             .createSchemas(true)
             .load()
             .migrate();
-        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
-            postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
-        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
-        repository = new PostgresIncidentRepository(jdbcTemplate, new ObjectMapper());
         jdbcTemplate.execute("TRUNCATE stackwatch_incident.incidents CASCADE");
     }
 
+    @AfterEach
+    void tearDown() {
+        applicationContext.close();
+    }
+
     @Test
-    void createsThenReusesActiveIncidentAndAppendsItsTrigger() {
+    void usesSpringProxyToCreateThenReuseAnActiveIncidentAndTouchItsActivityTime() {
         Incident created = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "first signal", CREATED_AT));
         Incident reused = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("MANUAL", "investigate", CREATED_AT.plusSeconds(1)));
 
+        assertThat(AopUtils.isAopProxy(repository)).isTrue();
         assertThat(reused.id()).isEqualTo(created.id());
+        assertThat(reused.updatedAt()).isEqualTo(CREATED_AT.plusSeconds(1));
         assertThat(reused.triggers()).extracting(IncidentTrigger::triggerType)
             .containsExactly("FAST_PATH", "MANUAL");
-        assertThat(repository.findById(created.id())).contains(reused);
     }
 
     @Test
-    void persistsAuditRecordsAndRetrievesStructuredReport() {
+    @Timeout(10)
+    void concurrentCreateOrReuseProducesOneActiveIncidentWithBothTriggers() throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Incident> first = executor.submit(() -> createAfterBarrier(ready, start, "FAST_PATH"));
+            Future<Incident> second = executor.submit(() -> createAfterBarrier(ready, start, "MANUAL"));
+
+            assertThat(ready.await(2, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            Incident firstResult = first.get(5, TimeUnit.SECONDS);
+            Incident secondResult = second.get(5, TimeUnit.SECONDS);
+
+            assertThat(firstResult.id()).isEqualTo(secondResult.id());
+            assertThat(repository.findById(firstResult.id()).orElseThrow().triggers()).hasSize(2);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void startsOnceWithCompareAndSetAndDoesNotResurrectATerminalIncident() {
         Incident incident = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
-        Incident running = incident.start(CREATED_AT.plusSeconds(1));
-        repository.update(running);
 
-        InvestigationStep step = new InvestigationStep(
-            UUID.randomUUID(), incident.id(), 1,
-            new AgentDecision("CALL_TOOL", "Inspect downstream trace", "TRACE"),
-            "SUCCESS", CREATED_AT.plusSeconds(2));
+        Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
+        Incident completed = running.complete(CREATED_AT.plusSeconds(2));
+
+        assertThat(repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(2))).isEmpty();
+        assertThat(repository.updateIfCurrentStatus(completed, IncidentStatus.RUNNING)).isTrue();
+        assertThat(repository.updateIfCurrentStatus(running, IncidentStatus.PENDING)).isFalse();
+        assertThat(repository.findById(incident.id()).orElseThrow().status()).isEqualTo(IncidentStatus.COMPLETED);
+    }
+
+    @Test
+    void persistsCitedEvidenceLinksAndRetrievesTheStructuredReport() {
+        Incident incident = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
+        Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
+        InvestigationStep step = step(running.id(), CREATED_AT.plusSeconds(2));
         repository.appendStep(step);
-        Observation observation = new Observation(
-            UUID.randomUUID(), incident.id(), step.id(), "TRACE", "SUCCESS", "timeout span",
-            "trace://orders/123", CREATED_AT, CREATED_AT.plusSeconds(2), "observation-hash",
-            CREATED_AT.plusSeconds(2));
-        repository.appendObservation(observation);
-        Evidence evidence = new Evidence(
-            UUID.randomUUID(), incident.id(), observation.id(), "TRACE", "timeout span",
-            "trace://orders/123", CREATED_AT, CREATED_AT.plusSeconds(2), "evidence-hash",
-            CREATED_AT.plusSeconds(2));
-        repository.appendEvidence(evidence);
-        Hypothesis hypothesis = Hypothesis.assess(
-            UUID.randomUUID(), incident.id(), "Downstream order service timed out", 0.7,
-            List.of(evidence), CREATED_AT.plusSeconds(3));
+        Evidence logs = persistedEvidence(incident.id(), step.id(), "LOGS", CREATED_AT.plusSeconds(3));
+        Evidence trace = persistedEvidence(incident.id(), step.id(), "TRACE", CREATED_AT.plusSeconds(4));
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), incident.id(), "Downstream order service timed out", 0.9,
+            List.of(logs, trace), CREATED_AT.plusSeconds(5));
         IncidentReport report = IncidentReport.forInvestigation(
-            UUID.randomUUID(), incident.id(), List.of(hypothesis), List.of(evidence),
-            List.of("Deployment correlation"), "Inspect the downstream deployment", CREATED_AT.plusSeconds(4));
+            UUID.randomUUID(), incident.id(), List.of(hypothesis), List.of(logs, trace), List.of(),
+            "Inspect the downstream deployment", CREATED_AT.plusSeconds(6));
+
         repository.saveReport(report);
 
-        assertThat(repository.findById(incident.id()).orElseThrow().steps()).containsExactly(step);
-        assertThat(repository.findObservations(incident.id())).containsExactly(observation);
-        assertThat(repository.findEvidence(incident.id())).containsExactly(evidence);
-        assertThat(repository.findReport(incident.id())).contains(report);
+        IncidentReport loaded = repository.findReport(incident.id()).orElseThrow();
+        assertThat(loaded.reviewOutcome()).isEqualTo(IncidentStatus.COMPLETED);
+        assertThat(loaded.hypotheses()).singleElement().satisfies(saved -> {
+            assertThat(saved.verificationStatus()).isEqualTo(Hypothesis.VerificationStatus.VERIFIED);
+            assertThat(saved.citedEvidence()).containsExactlyInAnyOrder(logs, trace);
+        });
     }
 
     @Test
-    void marksStaleRunningIncidentsAsFailedWithoutDeletingTheirAuditHistory() {
+    void rejectsEvidenceForAnotherIncidentsObservationAndUnpersistedReportEvidence() {
+        Incident first = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "first", CREATED_AT));
+        Incident second = repository.createOrReuse(
+            "orders", "prod", "cluster-43", trigger("FAST_PATH", "second", CREATED_AT));
+        Observation observation = new Observation(
+            UUID.randomUUID(), first.id(), null, "LOGS", "SUCCESS", "timeout started",
+            "logs://orders", CREATED_AT, CREATED_AT, "observation-hash", CREATED_AT);
+        repository.appendObservation(observation);
+        Evidence foreignEvidence = new Evidence(
+            UUID.randomUUID(), second.id(), observation.id(), "LOGS", "timeout started",
+            "logs://orders", CREATED_AT, CREATED_AT, "evidence-hash", CREATED_AT);
+
+        assertThatIllegalArgumentException().isThrownBy(() -> repository.appendEvidence(foreignEvidence));
+
+        Evidence unpersistedLogs = evidence(first.id(), UUID.randomUUID(), "LOGS", CREATED_AT.plusSeconds(1));
+        Evidence unpersistedTrace = evidence(first.id(), UUID.randomUUID(), "TRACE", CREATED_AT.plusSeconds(2));
+        Hypothesis hypothesis = new Hypothesis(
+            UUID.randomUUID(), first.id(), "Downstream timeout", 0.9,
+            List.of(unpersistedLogs, unpersistedTrace), CREATED_AT.plusSeconds(3));
+        IncidentReport report = IncidentReport.forInvestigation(
+            UUID.randomUUID(), first.id(), List.of(hypothesis), List.of(unpersistedLogs, unpersistedTrace),
+            List.of(), "Inspect downstream", CREATED_AT.plusSeconds(4));
+
+        assertThatIllegalArgumentException().isThrownBy(() -> repository.saveReport(report));
+    }
+
+    @Test
+    void activeStepPreventsStaleFailureUntilItsActivityBecomesOld() {
         Incident incident = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
-        repository.update(incident.start(CREATED_AT.plusSeconds(1)));
+        Incident running = repository.startIfPending(incident.id(), CREATED_AT.plusSeconds(1)).orElseThrow();
+        repository.appendStep(step(running.id(), CREATED_AT.plusSeconds(5)));
 
-        int marked = repository.markStaleRunningFailed(CREATED_AT.plusSeconds(2), CREATED_AT.plusSeconds(3));
+        assertThat(repository.markStaleRunningFailed(CREATED_AT.plusSeconds(3), CREATED_AT.plusSeconds(6)))
+            .isZero();
+        assertThat(repository.markStaleRunningFailed(CREATED_AT.plusSeconds(6), CREATED_AT.plusSeconds(7)))
+            .isEqualTo(1);
+        assertThat(repository.findById(incident.id()).orElseThrow().status()).isEqualTo(IncidentStatus.FAILED);
+    }
 
-        Incident failed = repository.findById(incident.id()).orElseThrow();
-        assertThat(marked).isEqualTo(1);
-        assertThat(failed.status()).isEqualTo(IncidentStatus.FAILED);
-        assertThat(failed.failureReason()).contains("stale");
+    private Incident createAfterBarrier(CountDownLatch ready, CountDownLatch start, String triggerType)
+        throws InterruptedException {
+        ready.countDown();
+        if (!start.await(2, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("concurrent create barrier timed out");
+        }
+        return repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger(triggerType, triggerType, CREATED_AT));
+    }
+
+    private Evidence persistedEvidence(UUID incidentId, UUID stepId, String sourceType, Instant createdAt) {
+        Observation observation = new Observation(
+            UUID.randomUUID(), incidentId, stepId, sourceType, "SUCCESS", sourceType + " timeout",
+            sourceType.toLowerCase() + "://orders", CREATED_AT, createdAt, sourceType + "-observation",
+            createdAt);
+        repository.appendObservation(observation);
+        Evidence evidence = evidence(incidentId, observation.id(), sourceType, createdAt);
+        repository.appendEvidence(evidence);
+        return evidence;
+    }
+
+    private static InvestigationStep step(UUID incidentId, Instant createdAt) {
+        return new InvestigationStep(
+            UUID.randomUUID(), incidentId, 1,
+            new AgentDecision("CALL_TOOL", "Inspect downstream trace", "TRACE"),
+            "SUCCESS", createdAt);
     }
 
     private static IncidentTrigger trigger(String type, String note, Instant createdAt) {
         return new IncidentTrigger(UUID.randomUUID(), type, note, createdAt);
+    }
+
+    private static Evidence evidence(UUID incidentId, UUID observationId, String sourceType, Instant createdAt) {
+        return new Evidence(
+            UUID.randomUUID(), incidentId, observationId, sourceType, sourceType + " timeout",
+            sourceType.toLowerCase() + "://orders", CREATED_AT, createdAt, sourceType + "-hash", createdAt);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableTransactionManagement(proxyTargetClass = true)
+    static class RepositoryTestConfiguration {
+
+        @Bean
+        DataSource dataSource() {
+            return new DriverManagerDataSource(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+        }
+
+        @Bean
+        JdbcTemplate jdbcTemplate(DataSource dataSource) {
+            return new JdbcTemplate(dataSource);
+        }
+
+        @Bean
+        ObjectMapper objectMapper() {
+            return new ObjectMapper();
+        }
+
+        @Bean
+        PlatformTransactionManager transactionManager(DataSource dataSource) {
+            return new DataSourceTransactionManager(dataSource);
+        }
+
+        @Bean
+        PostgresIncidentRepository incidentRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+            return new PostgresIncidentRepository(jdbcTemplate, objectMapper);
+        }
     }
 }
