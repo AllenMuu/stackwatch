@@ -38,3 +38,6 @@ node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 test-results/
+
+# Isolated local worktrees
+.worktrees/
