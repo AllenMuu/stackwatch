@@ -69,3 +69,19 @@
 
 - Commits: `ae72d57`, `2dbe49e`, `fbc91ca`, `24305d4`, `38b63b0`, plus the round-5 hardening commit.
 - Review: spec compliance PASS after five fix rounds; task quality PASS.
+
+## Task 4 complete
+
+- Commits: `79ca8fb`, `897e654`, `e4258a3`, `0fba64c`.
+- Delivered structured scripted/LLM decisions, bounded asynchronous runtime, CAS lifecycle
+  transitions, timeout/step/tool limits, failure observations and missing-evidence persistence, and
+  best-effort escalation on all Fast Path paths with cluster-identity validation.
+- Focused verification: `jenv exec mvn -o -Dtest=DeepInvestigationRuntimeTest,IncidentMetricsTest,IncidentEvaluatorTest test` — 7 passed.
+
+## Task 5 complete
+
+- Commit: `3bed2bd`.
+- Delivered guarded POST `/incidents`, read-only status/report endpoints, bounded-label Deep Path
+  metrics, versioned Feign-timeout fixture, and scripted evaluator assertions.
+- Focused verification: `IncidentMetricsTest` and `IncidentEvaluatorTest` passed; controller tests
+  compile but Mockito execution is blocked in this sandbox by Byte Buddy self-attach restrictions.

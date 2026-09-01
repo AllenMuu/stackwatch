@@ -18,15 +18,15 @@
 
 ## 4. Bounded Deep Investigation runtime
 
-- [ ] 4.1 Add scripted and LLM-backed structured AgentDecision providers with no chain-of-thought persistence.
-- [ ] 4.2 Implement the bounded asynchronous runtime, configured limits, state validation, and terminal failure/review behavior.
-- [ ] 4.3 Integrate best-effort escalation after qualifying Fast Path clusters while preserving ErrorAnalyzer return behavior.
+- [x] 4.1 Add scripted and LLM-backed structured AgentDecision providers with no chain-of-thought persistence.
+- [x] 4.2 Implement the bounded asynchronous runtime, configured limits, state validation, and terminal failure/review behavior.
+- [x] 4.3 Integrate best-effort escalation after qualifying Fast Path clusters while preserving ErrorAnalyzer return behavior.
 
 ## 5. APIs, metrics, and evaluation
 
-- [ ] 5.1 Add POST /incidents and read-only Incident status/report endpoints with unit tests.
-- [ ] 5.2 Add low-cardinality Deep Path Micrometer metrics and tests.
-- [ ] 5.3 Add the versioned Feign-timeout fixture, scripted evaluation assertions, and documentation for enabling the feature.
+- [x] 5.1 Add POST /incidents and read-only Incident status/report endpoints with unit tests.
+- [x] 5.2 Add low-cardinality Deep Path Micrometer metrics and tests.
+- [x] 5.3 Add the versioned Feign-timeout fixture, scripted evaluation assertions, and documentation for enabling the feature.
 
 ## 6. Verification and documentation
 

@@ -100,6 +100,17 @@ curl -X POST http://localhost:8080/analyze \
   -d '{"appName":"order-service","exceptionType":"NullPointerException","exceptionMessage":"Cannot invoke method on null","stackTrace":["com.foo.OrderService.process(OrderService.java:42)","com.foo.OrderController.handle(OrderController.java:17)"]}'
 ```
 
+### Deep Path 事故调查（可选）
+
+Deep Path 默认关闭。设置 `stackwatch.incident.enabled=true`，并通过环境变量配置
+`INCIDENT_DATASOURCE_URL`、`INCIDENT_DATASOURCE_USERNAME`、`INCIDENT_DATASOURCE_PASSWORD` 后，
+Flyway 会创建 PostgreSQL 审计表；该开关与 L2 相互独立。符合条件的 Fast Path 簇异步升级，
+不阻塞或改变原 `/analyze` 返回。运行时只允许服务端注册的只读 Logs、Trace、Git/Deployment
+Toolset，输出脱敏并哈希；失败/超时只记录 Observation 和缺失证据，不能成为 Evidence。
+通过 `POST /incidents`（已有 `clusterId`，可选备注）发起调查，使用 `GET /incidents/{id}`
+查看状态、`GET /incidents/{id}/report` 查看报告。内置 Feign 超时夹具无需外部 Provider；生产
+环境需替换为部署配置的只读适配器，系统不执行自动修复或恢复。
+
 ## 当前状态
 MVP 阶段 - 五层主链路 + 两层横切均已实现；L2 / Kafka 默认关闭，按配置解锁。
 

@@ -26,6 +26,6 @@ Implemented Task 4.1–4.3 in the `add-deep-incident-investigation` worktree.
 
 - `jenv exec mvn -o -DskipTests compile` — passed.
 - `git diff --check` — passed.
-- The focused runtime test was added, but Maven test compilation is currently blocked by an unrelated
-  uncommitted Task 5 `IncidentControllerTest` constructor mismatch (`RootCauseAnalysis`); once that
-  parallel work is corrected, run `jenv exec mvn -o -Dtest=DeepInvestigationRuntimeTest test`.
+- `jenv exec mvn -o -Dtest=DeepInvestigationRuntimeTest,IncidentMetricsTest,IncidentEvaluatorTest test`
+  — 7 passed. Controller/Mockito suites remain host-only because this sandbox blocks Byte Buddy
+  self-attachment.
