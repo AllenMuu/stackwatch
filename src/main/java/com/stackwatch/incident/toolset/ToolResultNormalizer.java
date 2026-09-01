@@ -19,6 +19,10 @@ final class ToolResultNormalizer {
     private static final Pattern QUOTED_SECRET_PREFIX = Pattern.compile(
         "(?i)(?<![A-Za-z0-9_])(?:['\"])?(?:" + SECRET_FIELD
             + ")(?:['\"])?\\s*[:=]\\s*(['\"])");
+    private static final Pattern SECRET_ASSIGNMENT_PREFIX = Pattern.compile(
+        "(?i)(?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]");
+    private static final Pattern SECRET_FIELD_NAME = Pattern.compile(
+        "(?i)(?:" + SECRET_FIELD + ")");
     private static final Pattern BARE_SECRET = Pattern.compile(
         "(?i)((?<![A-Za-z0-9_])(?:" + SECRET_FIELD + ")\\b\\s*[:=]\\s*)"
             + "(?:bearer\\s+)?[^\\s,;\"'\\]}]+");
@@ -58,10 +62,34 @@ final class ToolResultNormalizer {
     }
 
     private static String redact(String value) {
-        String jsonRedacted = JSON_STRING_SECRET.matcher(value).replaceAll("$1[REDACTED]$2");
+        String escapedJsonRedacted = redactEscapedJsonSecrets(value);
+        String jsonRedacted = JSON_STRING_SECRET.matcher(escapedJsonRedacted)
+            .replaceAll("$1[REDACTED]$2");
         String quotedRedacted = redactQuotedSecrets(jsonRedacted);
         String bareRedacted = BARE_SECRET.matcher(quotedRedacted).replaceAll("$1[REDACTED]");
         return URL.matcher(bareRedacted).replaceAll("[REDACTED_URL]");
+    }
+
+    private static String redactEscapedJsonSecrets(String value) {
+        for (int index = 0; index < value.length() - 1; index++) {
+            if (!startsEscapedQuote(value, index)) {
+                continue;
+            }
+            int keyStart = index + 2;
+            int keyEnd = findEscapedQuote(value, keyStart);
+            if (keyEnd < 0 || !isSecretField(value.substring(keyStart, keyEnd))) {
+                continue;
+            }
+            int valueStart = skipWhitespace(value, keyEnd + 2);
+            if (valueStart >= value.length() || value.charAt(valueStart) != ':') {
+                continue;
+            }
+            valueStart = skipWhitespace(value, valueStart + 1);
+            if (startsEscapedQuote(value, valueStart)) {
+                return value.substring(0, valueStart + 2) + "[REDACTED]";
+            }
+        }
+        return value;
     }
 
     private static String redactQuotedSecrets(String value) {
@@ -84,14 +112,60 @@ final class ToolResultNormalizer {
 
     private static int findClosingQuote(String value, int from, char quote) {
         for (int index = from; index < value.length(); index++) {
+            if (isSecretAssignmentAt(value, index)) {
+                return -1;
+            }
             char current = value.charAt(index);
             if (current == '\\' && index + 1 < value.length()) {
                 index++;
             } else if (current == quote) {
+                if (index + 1 < value.length() && value.charAt(index + 1) == quote) {
+                    index++;
+                    continue;
+                }
                 return index;
             }
         }
         return -1;
+    }
+
+    private static boolean isSecretAssignmentAt(String value, int index) {
+        if (index > 0 && isIdentifierCharacter(value.charAt(index - 1))) {
+            return false;
+        }
+        return SECRET_ASSIGNMENT_PREFIX.matcher(value)
+            .region(index, value.length())
+            .lookingAt();
+    }
+
+    private static boolean startsEscapedQuote(String value, int index) {
+        return index >= 0 && index + 1 < value.length()
+            && value.charAt(index) == '\\' && value.charAt(index + 1) == '"';
+    }
+
+    private static int findEscapedQuote(String value, int from) {
+        for (int index = from; index < value.length() - 1; index++) {
+            if (startsEscapedQuote(value, index)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isSecretField(String value) {
+        return SECRET_FIELD_NAME.matcher(value).matches();
+    }
+
+    private static int skipWhitespace(String value, int index) {
+        int position = index;
+        while (position < value.length() && Character.isWhitespace(value.charAt(position))) {
+            position++;
+        }
+        return position;
+    }
+
+    private static boolean isIdentifierCharacter(char value) {
+        return Character.isLetterOrDigit(value) || value == '_';
     }
 
     private static String safeMessage(String message) {

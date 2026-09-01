@@ -23,6 +23,16 @@ public record Evidence(UUID id, UUID incidentId, UUID observationId, String sour
         }
     }
 
+    /** Ensures evidence is derived only from an Observation representing usable source output. */
+    public static void requireEligibleObservation(Observation observation) {
+        Objects.requireNonNull(observation, "observation is required");
+        if (observation.status().equalsIgnoreCase("FAILURE")
+            || observation.status().equalsIgnoreCase("REJECTED")) {
+            throw new IllegalArgumentException(
+                "evidence cannot reference a failed or rejected observation");
+        }
+    }
+
     private static String requireText(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(name + " is required");

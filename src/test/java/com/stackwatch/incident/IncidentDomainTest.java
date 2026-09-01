@@ -1,6 +1,7 @@
 package com.stackwatch.incident;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -11,6 +12,7 @@ import com.stackwatch.incident.domain.Incident;
 import com.stackwatch.incident.domain.IncidentReport;
 import com.stackwatch.incident.domain.IncidentStatus;
 import com.stackwatch.incident.domain.IncidentTrigger;
+import com.stackwatch.incident.domain.Observation;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -156,6 +158,19 @@ class IncidentDomainTest {
         assertThat(report.requiresHumanReview()).isTrue();
     }
 
+    @Test
+    void evidenceRejectsFailureAndRejectedObservations() {
+        Observation failed = observation("FAILURE");
+        Observation rejected = observation("REJECTED");
+
+        assertThatIllegalArgumentException().isThrownBy(
+            () -> Evidence.requireEligibleObservation(failed));
+        assertThatIllegalArgumentException().isThrownBy(
+            () -> Evidence.requireEligibleObservation(rejected));
+        assertThatCode(() -> Evidence.requireEligibleObservation(observation("SUCCESS")))
+            .doesNotThrowAnyException();
+    }
+
     private static Incident pendingIncident(String application, String environment, String clusterId) {
         return Incident.pending(
             UUID.randomUUID(), application, environment, clusterId,
@@ -171,5 +186,11 @@ class IncidentDomainTest {
             UUID.randomUUID(), incidentId, UUID.randomUUID(), sourceType, summary,
             "incident://" + sourceType.toLowerCase(), CREATED_AT, CREATED_AT,
             sourceType + "-hash", CREATED_AT);
+    }
+
+    private static Observation observation(String status) {
+        return new Observation(
+            UUID.randomUUID(), UUID.randomUUID(), null, "TRACE", status, "Trace unavailable",
+            "trace://orders", CREATED_AT, CREATED_AT, "trace-hash", CREATED_AT);
     }
 }

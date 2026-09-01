@@ -265,6 +265,22 @@ class PostgresIncidentRepositoryTest {
     }
 
     @Test
+    void rejectsEvidenceThatReferencesFailureOrRejectedObservations() {
+        Incident incident = repository.createOrReuse(
+            "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));
+
+        for (String status : List.of("FAILURE", "REJECTED")) {
+            Observation observation = new Observation(
+                UUID.randomUUID(), incident.id(), null, "TRACE", status, "Trace unavailable",
+                "trace://orders", CREATED_AT, CREATED_AT, "observation-" + status, CREATED_AT);
+            repository.appendObservation(observation);
+            Evidence evidence = evidence(incident.id(), observation.id(), "TRACE", CREATED_AT);
+
+            assertThatIllegalArgumentException().isThrownBy(() -> repository.appendEvidence(evidence));
+        }
+    }
+
+    @Test
     void activeStepPreventsStaleFailureUntilItsActivityBecomesOld() {
         Incident incident = repository.createOrReuse(
             "orders", "prod", "cluster-42", trigger("FAST_PATH", "qualifying", CREATED_AT));

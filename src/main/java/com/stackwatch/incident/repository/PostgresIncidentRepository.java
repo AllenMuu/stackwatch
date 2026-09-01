@@ -164,7 +164,8 @@ public class PostgresIncidentRepository implements IncidentRepository {
     @Override
     @Transactional
     public void appendEvidence(Evidence evidence) {
-        requireOwnedRecord("observations", evidence.observationId(), evidence.incidentId());
+        Evidence.requireEligibleObservation(
+            requireOwnedObservation(evidence.observationId(), evidence.incidentId()));
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.evidence
                 (id, incident_id, observation_id, source_type, redacted_summary, provenance,
@@ -323,6 +324,19 @@ public class PostgresIncidentRepository implements IncidentRepository {
         if (owners.size() != 1 || !incidentId.equals(owners.getFirst())) {
             throw new IllegalArgumentException(table + " record must belong to incident");
         }
+    }
+
+    private Observation requireOwnedObservation(UUID observationId, UUID incidentId) {
+        List<Observation> observations = jdbcTemplate.query("""
+            SELECT id, incident_id, step_id, source_type, status, redacted_summary, provenance,
+                   observed_from, observed_to, content_hash, created_at
+            FROM stackwatch_incident.observations
+            WHERE id = ? AND incident_id = ?
+            """, observationRowMapper(), observationId, incidentId);
+        if (observations.size() != 1) {
+            throw new IllegalArgumentException("observation record must belong to incident");
+        }
+        return observations.getFirst();
     }
 
     private IncidentReport reportWithPersistedEvidence(IncidentReport report) {

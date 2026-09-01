@@ -171,6 +171,48 @@ class ToolExecutorTest {
     }
 
     @Test
+    void redactsMalformedChainedCredentialsBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new ChainedCredentialFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains("password=\"[REDACTED]");
+        assertSecretIsNotPersisted(result, observation, "first", "second");
+    }
+
+    @Test
+    void redactsDoubledQuotePasswordValuesBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new DoubledQuotePasswordFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains("password='[REDACTED]'");
+        assertSecretIsNotPersisted(result, observation, "abc", "def");
+    }
+
+    @Test
+    void redactsEscapedJsonSecretKeysBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new EscapedJsonSecretFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains("\\\"password\\\":\\\"[REDACTED]");
+        assertSecretIsNotPersisted(result, observation, "stringified-secret");
+    }
+
+    @Test
     void suppliesNormalizedDeterministicResultsForAllStubToolsets() {
         ToolExecutor executor = stubExecutor();
 
@@ -197,6 +239,14 @@ class ToolExecutorTest {
         assertThat(result.status()).isEqualTo(ToolResultStatus.REJECTED);
         assertThat(result.missingEvidence()).hasValueSatisfying(
             missingEvidence -> assertThat(missingEvidence).contains("unregistered tool"));
+    }
+
+    private static void assertSecretIsNotPersisted(ToolResult result, Observation observation,
+                                                   String... secretFragments) {
+        assertThat(result.redactedSummary()).doesNotContain(secretFragments);
+        assertThat(observation.redactedSummary()).doesNotContain(secretFragments);
+        assertThat(result.missingEvidence()).hasValueSatisfying(
+            missingEvidence -> assertThat(missingEvidence).doesNotContain(secretFragments));
     }
 
     private static Incident incident(String applicationName, String environment, String clusterId) {
@@ -291,6 +341,47 @@ class ToolExecutorTest {
         @Override
         public ToolRawResult execute(ToolScope scope) {
             throw new IllegalStateException("provider rejected password=\"secret");
+        }
+    }
+
+    private static final class ChainedCredentialFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException(
+                "provider rejected password=\"first\n" + " token=\"second\"");
+        }
+    }
+
+    private static final class DoubledQuotePasswordFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException("provider rejected password='abc''def'");
+        }
+    }
+
+    private static final class EscapedJsonSecretFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException(
+                "provider rejected {\\\"password\\\":\\\"stringified-secret\\\"}");
         }
     }
 
