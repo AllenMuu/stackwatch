@@ -7,17 +7,28 @@ import com.stackwatch.preprocess.Fingerprinter;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
+
+import javax.sql.DataSource;
 
 /**
  * StackWatch 配置：集中创建分析链路的协作 bean。
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties({AnalysisProperties.class, CacheProperties.class, ContextOptimizerProperties.class, FeishuProperties.class})
+@EnableConfigurationProperties({
+    AnalysisProperties.class,
+    CacheProperties.class,
+    ContextOptimizerProperties.class,
+    DataSourceProperties.class,
+    FeishuProperties.class,
+    IncidentProperties.class
+})
 public class StackWatchConfig {
 
     @Bean
@@ -36,5 +47,18 @@ public class StackWatchConfig {
     @Bean
     ChatClient chatClient(ChatClient.Builder builder) {
         return builder.build();
+    }
+
+    /**
+     * Deep Path 的独立数据源。
+     *
+     * <p>全局仍排除 {@code DataSourceAutoConfiguration}，因此默认 Fast Path 不会创建
+     * 数据源。只有 Incident 显式启用时才绑定标准 {@code spring.datasource.*} 配置，
+     * 让 Flyway/JPA 在唯一的候选数据源上工作；这与 L2 开关相互独立。</p>
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
+    DataSource incidentDataSource(DataSourceProperties properties) {
+        return properties.initializeDataSourceBuilder().build();
     }
 }
