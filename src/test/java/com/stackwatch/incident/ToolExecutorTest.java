@@ -137,6 +137,40 @@ class ToolExecutorTest {
     }
 
     @Test
+    void redactsNewlineContainingQuotedPasswordsBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new NewlinePasswordFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains("password=\"[REDACTED]\"");
+        assertThat(result.redactedSummary()).doesNotContain("abc", "def", "xyz");
+        assertThat(observation.redactedSummary()).doesNotContain("abc", "def", "xyz");
+        assertThat(result.missingEvidence()).hasValueSatisfying(
+            missingEvidence -> assertThat(missingEvidence).doesNotContain("abc", "def", "xyz"));
+    }
+
+    @Test
+    void redactsUnterminatedQuotedPasswordsToEndOfInputBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new UnterminatedPasswordFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains("password=\"[REDACTED]");
+        assertThat(result.redactedSummary()).doesNotContain("secret");
+        assertThat(observation.redactedSummary()).doesNotContain("secret");
+        assertThat(result.missingEvidence()).hasValueSatisfying(
+            missingEvidence -> assertThat(missingEvidence).doesNotContain("secret"));
+    }
+
+    @Test
     void suppliesNormalizedDeterministicResultsForAllStubToolsets() {
         ToolExecutor executor = stubExecutor();
 
@@ -231,6 +265,32 @@ class ToolExecutorTest {
         public ToolRawResult execute(ToolScope scope) {
             throw new IllegalStateException(
                 "provider rejected password=\"abc'def\" password='abc\"def'");
+        }
+    }
+
+    private static final class NewlinePasswordFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException("provider rejected password=\"abc'def\nxyz\"");
+        }
+    }
+
+    private static final class UnterminatedPasswordFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException("provider rejected password=\"secret");
         }
     }
 

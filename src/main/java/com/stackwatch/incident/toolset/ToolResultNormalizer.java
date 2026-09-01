@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Redacts adapter output before it crosses the Observation persistence boundary. */
@@ -15,9 +16,9 @@ final class ToolResultNormalizer {
         "authorization|password|passwd|pwd|secret|token|api(?:[-_]?key)";
     private static final Pattern JSON_STRING_SECRET = Pattern.compile(
         "(?i)(\"(?:" + SECRET_FIELD + ")\"\\s*:\\s*\")(?:\\\\.|[^\"\\\\])*(\")");
-    private static final Pattern QUOTED_SECRET = Pattern.compile(
-        "(?i)((?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]\\s*)(['\"])"
-            + "(?:\\\\.|(?!\\2).)*\\2");
+    private static final Pattern QUOTED_SECRET_PREFIX = Pattern.compile(
+        "(?i)(?<![A-Za-z0-9_])(?:['\"])?(?:" + SECRET_FIELD
+            + ")(?:['\"])?\\s*[:=]\\s*(['\"])");
     private static final Pattern BARE_SECRET = Pattern.compile(
         "(?i)((?<![A-Za-z0-9_])(?:" + SECRET_FIELD + ")\\b\\s*[:=]\\s*)"
             + "(?:bearer\\s+)?[^\\s,;\"'\\]}]+");
@@ -58,9 +59,39 @@ final class ToolResultNormalizer {
 
     private static String redact(String value) {
         String jsonRedacted = JSON_STRING_SECRET.matcher(value).replaceAll("$1[REDACTED]$2");
-        String quotedRedacted = QUOTED_SECRET.matcher(jsonRedacted).replaceAll("$1$2[REDACTED]$2");
+        String quotedRedacted = redactQuotedSecrets(jsonRedacted);
         String bareRedacted = BARE_SECRET.matcher(quotedRedacted).replaceAll("$1[REDACTED]");
         return URL.matcher(bareRedacted).replaceAll("[REDACTED_URL]");
+    }
+
+    private static String redactQuotedSecrets(String value) {
+        Matcher matcher = QUOTED_SECRET_PREFIX.matcher(value);
+        StringBuilder redacted = new StringBuilder(value.length());
+        int from = 0;
+        while (matcher.find(from)) {
+            int quoteIndex = matcher.start(1);
+            char quote = value.charAt(quoteIndex);
+            redacted.append(value, from, quoteIndex + 1).append("[REDACTED]");
+            int closingQuote = findClosingQuote(value, quoteIndex + 1, quote);
+            if (closingQuote < 0) {
+                return redacted.toString();
+            }
+            redacted.append(quote);
+            from = closingQuote + 1;
+        }
+        return redacted.append(value, from, value.length()).toString();
+    }
+
+    private static int findClosingQuote(String value, int from, char quote) {
+        for (int index = from; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current == '\\' && index + 1 < value.length()) {
+                index++;
+            } else if (current == quote) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private static String safeMessage(String message) {
