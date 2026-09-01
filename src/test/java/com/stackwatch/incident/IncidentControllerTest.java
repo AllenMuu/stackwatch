@@ -2,6 +2,7 @@ package com.stackwatch.incident;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,7 +50,8 @@ class IncidentControllerTest {
         Incident incident = incident(cluster, IncidentStatus.PENDING);
         when(clusterRepository.findById(cluster.clusterId())).thenReturn(Optional.of(cluster));
         when(incidentRepository.createOrReuse(
-            cluster.appName(), "unknown", cluster.clusterId(), org.mockito.ArgumentMatchers.any()))
+            eq(cluster.appName()), eq("unknown"), eq(cluster.clusterId()),
+            org.mockito.ArgumentMatchers.any()))
             .thenReturn(incident);
 
         IncidentResponse response = controller().create(new CreateIncidentRequest("cluster-42", "check timeout"));
@@ -117,7 +119,12 @@ class IncidentControllerTest {
     private static Incident incident(String clusterId, UUID id, IncidentStatus status) {
         IncidentTrigger trigger = new IncidentTrigger(UUID.randomUUID(), "MANUAL", "check", NOW);
         Incident incident = Incident.pending(id, "orders", "unknown", clusterId, List.of(trigger), NOW);
-        return status == IncidentStatus.PENDING ? incident : incident.start(NOW.plusSeconds(1))
-            .transitionTo(status, NOW.plusSeconds(2), null);
+        if (status == IncidentStatus.PENDING) {
+            return incident;
+        }
+        Incident running = incident.start(NOW.plusSeconds(1));
+        return status == IncidentStatus.RUNNING
+            ? running
+            : running.transitionTo(status, NOW.plusSeconds(2), null);
     }
 }
