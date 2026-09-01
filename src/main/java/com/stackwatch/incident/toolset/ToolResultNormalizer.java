@@ -16,8 +16,8 @@ final class ToolResultNormalizer {
     private static final Pattern JSON_STRING_SECRET = Pattern.compile(
         "(?i)(\"(?:" + SECRET_FIELD + ")\"\\s*:\\s*\")(?:\\\\.|[^\"\\\\])*(\")");
     private static final Pattern QUOTED_SECRET = Pattern.compile(
-        "(?i)((?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]\\s*['\"])"
-            + "(?:\\\\.|[^'\"\\\\])*(['\"])");
+        "(?i)((?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]\\s*)(['\"])"
+            + "(?:\\\\.|(?!\\2).)*\\2");
     private static final Pattern BARE_SECRET = Pattern.compile(
         "(?i)((?<![A-Za-z0-9_])(?:" + SECRET_FIELD + ")\\b\\s*[:=]\\s*)"
             + "(?:bearer\\s+)?[^\\s,;\"'\\]}]+");
@@ -58,7 +58,7 @@ final class ToolResultNormalizer {
 
     private static String redact(String value) {
         String jsonRedacted = JSON_STRING_SECRET.matcher(value).replaceAll("$1[REDACTED]$2");
-        String quotedRedacted = QUOTED_SECRET.matcher(jsonRedacted).replaceAll("$1[REDACTED]$2");
+        String quotedRedacted = QUOTED_SECRET.matcher(jsonRedacted).replaceAll("$1$2[REDACTED]$2");
         String bareRedacted = BARE_SECRET.matcher(quotedRedacted).replaceAll("$1[REDACTED]");
         return URL.matcher(bareRedacted).replaceAll("[REDACTED_URL]");
     }

@@ -119,6 +119,24 @@ class ToolExecutorTest {
     }
 
     @Test
+    void redactsEntireMixedQuotePasswordValuesBeforeObservationConversion() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new MixedQuotePasswordFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(result.redactedSummary()).contains(
+            "password=\"[REDACTED]\"", "password='[REDACTED]'");
+        assertThat(result.redactedSummary()).doesNotContain("abc", "def");
+        assertThat(observation.redactedSummary()).doesNotContain("abc", "def");
+        assertThat(result.missingEvidence()).hasValueSatisfying(
+            missingEvidence -> assertThat(missingEvidence).doesNotContain("abc", "def"));
+    }
+
+    @Test
     void suppliesNormalizedDeterministicResultsForAllStubToolsets() {
         ToolExecutor executor = stubExecutor();
 
@@ -199,6 +217,20 @@ class ToolExecutorTest {
         public ToolRawResult execute(ToolScope scope) {
             receivedScope = scope;
             return new LogsStubAdapter().execute(scope);
+        }
+    }
+
+    private static final class MixedQuotePasswordFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException(
+                "provider rejected password=\"abc'def\" password='abc\"def'");
         }
     }
 
