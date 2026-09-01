@@ -49,7 +49,8 @@ public final class PostgresIncidentEscalator implements IncidentEscalator {
     }
 
     private static boolean qualifies(AnalysisResult result) {
-        return result.path() == AnalysisPath.LLM_NEW
-            || result.reviewLevel() != ReviewLevel.AUTO_CONFIRMED;
+        return result.clusterId() != null && !result.clusterId().isBlank()
+            && (result.path() == AnalysisPath.LLM_NEW
+                || result.reviewLevel() != ReviewLevel.AUTO_CONFIRMED);
     }
 }
