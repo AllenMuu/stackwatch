@@ -45,6 +45,19 @@ class SkillMatcherTest {
     }
 
     @Test
+    void matchesFeignWhenFastPathRcaSuppliesARequiredSignalMissingFromTheException() {
+        SkillMatcher matcher = new SkillMatcher(new IncidentSkillLoader().loadDefaults());
+        IncidentSignals signals = new IncidentSignals(
+            "feign.RetryableException", "Downstream call failed", List.of());
+        RootCauseAnalysis fastPathRca = new RootCauseAnalysis(
+            "The downstream order service read timeout is increasing", "NETWORK", "HIGH", 0.94,
+            "Inspect the downstream deployment", List.of(), false);
+
+        assertThat(matcher.select(signals, fastPathRca)).map(IncidentSkill::id)
+            .contains("spring/feign-timeout");
+    }
+
+    @Test
     void doesNotSelectASkillWhenTheSignalsDoNotMatchItsConfiguredRequirements() {
         SkillMatcher matcher = new SkillMatcher(new IncidentSkillLoader().loadDefaults());
         IncidentSignals signals = new IncidentSignals(

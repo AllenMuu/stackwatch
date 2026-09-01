@@ -11,44 +11,56 @@ import java.util.regex.Pattern;
 /** Redacts adapter output before it crosses the Observation persistence boundary. */
 final class ToolResultNormalizer {
 
-    private static final Pattern URL = Pattern.compile("(?i)https?://[^\\s,;]+" );
-    private static final Pattern SECRET = Pattern.compile(
-        "(?i)\\b(authorization|password|passwd|pwd|secret|token|api[-_]?key)\\s*[:=]\\s*"
-            + "(?:bearer\\s+)?[^\\s,;]+" );
+    private static final String SECRET_FIELD =
+        "authorization|password|passwd|pwd|secret|token|api(?:[-_]?key)";
+    private static final Pattern JSON_STRING_SECRET = Pattern.compile(
+        "(?i)(\"(?:" + SECRET_FIELD + ")\"\\s*:\\s*\")(?:\\\\.|[^\"\\\\])*(\")");
+    private static final Pattern QUOTED_SECRET = Pattern.compile(
+        "(?i)((?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]\\s*['\"])"
+            + "(?:\\\\.|[^'\"\\\\])*(['\"])");
+    private static final Pattern BARE_SECRET = Pattern.compile(
+        "(?i)((?<![A-Za-z0-9_])(?:" + SECRET_FIELD + ")\\b\\s*[:=]\\s*)"
+            + "(?:bearer\\s+)?[^\\s,;\"'\\]}]+");
+    private static final Pattern URL = Pattern.compile("(?i)https?://[^\\s,;\"'\\]}]+");
 
     ToolResult success(Toolset toolset, ToolRawResult rawResult) {
-        String summary = redact(rawResult.summary());
-        String provenance = redact(rawResult.provenance());
-        return result(toolset, ToolResultStatus.SUCCESS, summary, provenance,
-            rawResult.observedFrom(),
-            rawResult.observedTo(), Optional.empty());
+        return normalize(new ResultDetails(toolset, ToolResultStatus.SUCCESS, rawResult.summary(),
+            rawResult.provenance(), rawResult.observedFrom(), rawResult.observedTo(), false));
     }
 
     ToolResult failure(Toolset toolset, String message) {
-        String summary = redact("Toolset call failed: " + safeMessage(message));
-        return result(toolset, ToolResultStatus.FAILURE, summary, "stackwatch:tool-executor", null,
-            null, Optional.of("Missing evidence: " + summary));
+        return normalize(new ResultDetails(toolset, ToolResultStatus.FAILURE,
+            "Toolset call failed: " + safeMessage(message), "stackwatch:tool-executor", null, null,
+            true));
     }
 
     ToolResult rejected(Toolset toolset, String message) {
-        String summary = redact("Toolset request rejected: " + safeMessage(message));
-        return result(toolset, ToolResultStatus.REJECTED, summary, "stackwatch:tool-policy", null,
-            null, Optional.of("Missing evidence: " + summary));
+        return normalize(new ResultDetails(toolset, ToolResultStatus.REJECTED,
+            "Toolset request rejected: " + safeMessage(message), "stackwatch:tool-policy", null,
+            null,
+            true));
     }
 
-    private ToolResult result(Toolset toolset, ToolResultStatus status, String summary,
-                              String provenance, Instant observedFrom, Instant observedTo,
-                              Optional<String> missingEvidence) {
-        String contentHash = contentHash(
-            toolset, status, summary, provenance, observedFrom, observedTo);
+    private ToolResult normalize(ResultDetails details) {
+        String summary = redact(details.summary());
+        String provenance = redact(details.provenance());
+        ResultDetails redacted = new ResultDetails(
+            details.toolset(), details.status(), summary, provenance,
+            details.observedFrom(), details.observedTo(), details.requiresMissingEvidence());
+        Optional<String> missingEvidence = redacted.requiresMissingEvidence()
+            ? Optional.of("Missing evidence: " + redacted.summary())
+            : Optional.empty();
         return new ToolResult(
-            toolset, status, summary, provenance, observedFrom, observedTo, contentHash,
+            redacted.toolset(), redacted.status(), redacted.summary(), redacted.provenance(),
+            redacted.observedFrom(), redacted.observedTo(), contentHash(redacted),
             missingEvidence);
     }
 
     private static String redact(String value) {
-        String withoutSecrets = SECRET.matcher(value).replaceAll("$1=[REDACTED]");
-        return URL.matcher(withoutSecrets).replaceAll("[REDACTED_URL]");
+        String jsonRedacted = JSON_STRING_SECRET.matcher(value).replaceAll("$1[REDACTED]$2");
+        String quotedRedacted = QUOTED_SECRET.matcher(jsonRedacted).replaceAll("$1[REDACTED]$2");
+        String bareRedacted = BARE_SECRET.matcher(quotedRedacted).replaceAll("$1[REDACTED]");
+        return URL.matcher(bareRedacted).replaceAll("[REDACTED_URL]");
     }
 
     private static String safeMessage(String message) {
@@ -57,17 +69,21 @@ final class ToolResultNormalizer {
             : message;
     }
 
-    private static String contentHash(Toolset toolset, ToolResultStatus status, String summary,
-                                      String provenance, Instant observedFrom, Instant observedTo) {
+    private static String contentHash(ResultDetails details) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String content = toolset.configuredName() + "|" + status + "|" + summary + "|"
-                + provenance
-                + "|" + observedFrom + "|" + observedTo;
+            String content = details.toolset().configuredName() + "|" + details.status() + "|"
+                + details.summary() + "|" + details.provenance() + "|" + details.observedFrom()
+                + "|" + details.observedTo();
             return HexFormat.of().formatHex(
                 digest.digest(content.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is required by the JVM", exception);
         }
+    }
+
+    private record ResultDetails(Toolset toolset, ToolResultStatus status, String summary,
+                                 String provenance, Instant observedFrom, Instant observedTo,
+                                 boolean requiresMissingEvidence) {
     }
 }
