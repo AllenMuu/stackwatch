@@ -115,6 +115,21 @@ class DeepInvestigationRuntimeTest {
             .anyMatch(value -> value.contains("Missing evidence"));
     }
 
+    @Test
+    void ungroundedCompletionCannotBeVerifiedByUnrelatedSuccessfulSources() {
+        InMemoryIncidents repository = new InMemoryIncidents();
+        DeepInvestigationRuntime runtime = runtime(repository, new ScriptedAgentDecisionProvider(List.of(
+            new com.stackwatch.incident.domain.AgentDecision("TOOL_CALL", "inspect logs", "logs"),
+            new com.stackwatch.incident.domain.AgentDecision("TOOL_CALL", "inspect trace", "trace"),
+            new com.stackwatch.incident.domain.AgentDecision("COMPLETE", "database corruption", null))));
+
+        Incident finished = runtime.run(repository.incident.id());
+
+        assertThat(finished.status()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
+        assertThat(repository.report.orElseThrow().missingEvidence())
+            .anyMatch(value -> value.contains("not grounded"));
+    }
+
     private static DeepInvestigationRuntime runtime(InMemoryIncidents repository,
                                                      AgentDecisionProvider provider) {
         return runtime(repository, provider,

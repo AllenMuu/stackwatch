@@ -17,6 +17,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -24,6 +25,28 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration
 @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
 public class IncidentRuntimeConfiguration {
+
+    /** Marks workers left RUNNING by a prior process as failed before accepting new work. */
+    @Bean
+    IncidentRecovery incidentRecovery(IncidentRepository repository, IncidentProperties properties) {
+        return new IncidentRecovery(repository, properties);
+    }
+
+    static final class IncidentRecovery {
+        private final IncidentRepository repository;
+        private final IncidentProperties properties;
+
+        IncidentRecovery(IncidentRepository repository, IncidentProperties properties) {
+            this.repository = repository;
+            this.properties = properties;
+        }
+
+        @PostConstruct
+        void markStaleRuns() {
+            java.time.Instant now = java.time.Instant.now();
+            repository.markStaleRunningFailed(now.minus(properties.totalTimeout()), now);
+        }
+    }
 
     @Bean
     IncidentSkillLoader incidentSkillLoader() {

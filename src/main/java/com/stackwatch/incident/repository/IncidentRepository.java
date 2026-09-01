@@ -20,6 +20,12 @@ public interface IncidentRepository {
 
     Optional<Incident> findById(UUID incidentId);
 
+    /** Finds an active incident for an application/cluster pair regardless of environment. */
+    default Optional<Incident> findActiveByApplicationAndCluster(String applicationName,
+                                                                  String clusterId) {
+        return Optional.empty();
+    }
+
     Optional<Incident> startIfPending(UUID incidentId, Instant startedAt);
 
     boolean updateIfCurrentStatus(Incident incident, IncidentStatus expectedStatus);

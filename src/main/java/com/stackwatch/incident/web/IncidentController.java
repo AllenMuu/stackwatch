@@ -43,9 +43,13 @@ public class IncidentController {
             .orElseThrow(() -> notFound("cluster", request.clusterId()));
         IncidentTrigger trigger = new IncidentTrigger(UUID.randomUUID(), "MANUAL", request.note(),
             Instant.now());
-        // ErrorCluster intentionally has no environment dimension. A manual request is scoped to
-        // the current process's default identity until the cluster model carries that dimension.
-        Incident incident = incidentRepository.createOrReuse(cluster.appName(), "unknown",
+        // ErrorCluster has no environment dimension. Reuse any active incident for this
+        // application/cluster pair and preserve its server-owned environment.
+        String environment = incidentRepository
+            .findActiveByApplicationAndCluster(cluster.appName(), cluster.clusterId())
+            .map(Incident::environment)
+            .orElse("unknown");
+        Incident incident = incidentRepository.createOrReuse(cluster.appName(), environment,
             cluster.clusterId(), trigger);
         investigationScheduler.schedule(incident.id());
         return IncidentResponse.from(incident);

@@ -62,6 +62,25 @@ class IncidentControllerTest {
     }
 
     @Test
+    void manualRequestReusesActiveIncidentEnvironmentForSameApplicationAndCluster() {
+        ErrorCluster cluster = cluster("cluster-42");
+        Incident active = Incident.pending(UUID.randomUUID(), cluster.appName(), "prod",
+            cluster.clusterId(), List.of(new IncidentTrigger(UUID.randomUUID(), "FAST_PATH", null, NOW)), NOW)
+            .start(NOW.plusSeconds(1));
+        when(clusterRepository.findById(cluster.clusterId())).thenReturn(Optional.of(cluster));
+        when(incidentRepository.findActiveByApplicationAndCluster(cluster.appName(), cluster.clusterId()))
+            .thenReturn(Optional.of(active));
+        when(incidentRepository.createOrReuse(eq(cluster.appName()), eq(active.environment()),
+            eq(cluster.clusterId()), org.mockito.ArgumentMatchers.any())).thenReturn(active);
+
+        IncidentResponse response = controller().create(new CreateIncidentRequest("cluster-42", null));
+
+        assertThat(response.id()).isEqualTo(active.id());
+        verify(incidentRepository).createOrReuse(eq(cluster.appName()), eq("prod"),
+            eq(cluster.clusterId()), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void rejectsManualRequestForUnknownClusterWithoutCreatingIncident() {
         when(clusterRepository.findById("missing")).thenReturn(Optional.empty());
 

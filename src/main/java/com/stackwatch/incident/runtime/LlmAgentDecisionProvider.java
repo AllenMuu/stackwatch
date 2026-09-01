@@ -1,6 +1,7 @@
 package com.stackwatch.incident.runtime;
 
 import com.stackwatch.incident.domain.AgentDecision;
+import com.stackwatch.incident.skills.IncidentSkill;
 import java.util.Objects;
 import java.util.Optional;
 import org.springframework.ai.chat.client.ChatClient;
@@ -22,7 +23,11 @@ public final class LlmAgentDecisionProvider implements AgentDecisionProvider {
             + "Incident=" + context.incident().activeKey()
             + "; observations=" + context.observations().size()
             + "; steps=" + context.stepCount()
-            + "; toolCalls=" + context.toolCallCount();
+            + "; toolCalls=" + context.toolCallCount()
+            + "; skills=" + context.skills().stream().map(IncidentSkill::id).toList()
+            + "; evidence=" + context.observations().stream()
+                .map(observation -> observation.sourceType() + ": " + observation.redactedSummary())
+                .limit(8).toList();
         try {
             AgentDecision decision = chatClient.prompt()
                 .user(prompt)

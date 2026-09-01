@@ -261,16 +261,40 @@ public final class DeepInvestigationRuntime {
                 item.contentHash(), clock.instant()))
             .toList();
         evidence.forEach(repository::appendEvidence);
-        List<Hypothesis> hypotheses = List.of(new Hypothesis(UUID.randomUUID(), incident.id(),
-            recommendation == null || recommendation.isBlank() ? "Insufficient evidence" : recommendation,
-            evidence.isEmpty() ? 0.0 : 0.5, evidence, clock.instant()));
         List<String> missing = new ArrayList<>(missingEvidence == null ? List.of() : missingEvidence);
         if (evidence.isEmpty() && missing.isEmpty()) {
             missing.add("At least two independent successful Toolsets");
         }
+        boolean grounded = isGrounded(recommendation, evidence);
+        List<Evidence> citedEvidence = grounded ? evidence : List.of();
+        if (!grounded && !evidence.isEmpty()) {
+            missing.add("Hypothesis summary is not grounded in observed evidence");
+        }
+        List<Hypothesis> hypotheses = List.of(new Hypothesis(UUID.randomUUID(), incident.id(),
+            recommendation == null || recommendation.isBlank() ? "Insufficient evidence" : recommendation,
+            citedEvidence.isEmpty() ? 0.0 : 0.5, citedEvidence, clock.instant()));
         return IncidentReport.forInvestigation(UUID.randomUUID(), incident.id(), hypotheses, evidence,
             missing,
             recommendation == null ? "Human review required" : recommendation, clock.instant());
+    }
+
+    private static boolean isGrounded(String recommendation, List<Evidence> evidence) {
+        if (recommendation == null || recommendation.isBlank() || evidence.isEmpty()) {
+            return false;
+        }
+        String normalized = recommendation.toLowerCase(java.util.Locale.ROOT);
+        long matchingTokens = recommendationTokens(normalized).stream().filter(token -> evidence.stream()
+            .map(item -> item.redactedSummary().toLowerCase(java.util.Locale.ROOT))
+            .anyMatch(summary -> summary.contains(token))).count();
+        return matchingTokens >= 2;
+    }
+
+    private static List<String> recommendationTokens(String value) {
+        return java.util.Arrays.stream(value.split("[^a-z0-9]+"))
+            .filter(token -> token.length() >= 4)
+            .filter(token -> !java.util.Set.of("with", "that", "this", "from", "into", "followed")
+                .contains(token))
+            .toList();
     }
 
     private Duration elapsedSince(Instant started) {

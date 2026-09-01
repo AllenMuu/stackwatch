@@ -92,6 +92,21 @@ public class PostgresIncidentRepository implements IncidentRepository {
         return Optional.of(row.toIncident(findTriggers(incidentId), findSteps(incidentId)));
     }
 
+    @Override
+    public Optional<Incident> findActiveByApplicationAndCluster(String applicationName,
+                                                                  String clusterId) {
+        return jdbcTemplate.query("""
+            SELECT id, application_name, environment, cluster_id, status, created_at, updated_at,
+                   started_at, completed_at, failure_reason
+            FROM stackwatch_incident.incidents
+            WHERE application_name = ? AND cluster_id = ? AND status IN (?, ?)
+            ORDER BY updated_at DESC, id
+            LIMIT 1
+            """, incidentRowMapper(), applicationName, clusterId,
+            IncidentStatus.PENDING.name(), IncidentStatus.RUNNING.name()).stream().findFirst()
+            .map(row -> row.toIncident(findTriggers(row.id()), findSteps(row.id())));
+    }
+
     /** Atomically claims one pending incident for a worker; all other callers observe an empty result. */
     @Override
     @Transactional
