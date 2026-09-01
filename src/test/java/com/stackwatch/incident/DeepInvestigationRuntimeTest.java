@@ -111,6 +111,8 @@ class DeepInvestigationRuntimeTest {
         assertThat(repository.observations).singleElement().extracting(Observation::status)
             .isEqualTo("FAILURE");
         assertThat(finished.status()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
+        assertThat(repository.report.orElseThrow().missingEvidence())
+            .anyMatch(value -> value.contains("Missing evidence"));
     }
 
     private static DeepInvestigationRuntime runtime(InMemoryIncidents repository,
