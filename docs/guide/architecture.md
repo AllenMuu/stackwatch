@@ -18,6 +18,24 @@ flowchart TD
 
 Data flow: `ErrorEventCollector` (collect) -> `Fingerprinter.generate` (preprocess) -> `ErrorAnalyzer.analyze` (L1->L2->L3) -> cluster lands in `ClusterRepository` -> `WeeklyAggregator`/`HighFrequencyDetector` (aggregate) -> `FeishuClient` (deliver).
 
+## Deep Path (opt-in)
+
+When `stackwatch.incident.enabled=true`, qualifying Fast Path results are handed to a separate
+asynchronous runtime. PostgreSQL stores Incident lifecycle, triggers, decisions, Observations,
+Evidence, hypotheses, and report snapshots. Compare-and-set claiming ensures one worker per active
+identity; step count, Toolset calls, per-call timeout, and total timeout are hard limits.
+
+The runtime selects versioned JVM Skills deterministically, then calls only server-registered,
+read-only Logs, Trace, and Git/Deployment adapters with the Incident's application/environment/
+cluster scope. No URL, credential, shell, SQL, Kubernetes command, or remediation selector is
+accepted from an API caller or model. Summaries are redacted and content-hashed before persistence.
+Only SUCCESS Observations may become Evidence; one independent source is PROVISIONAL, two are
+VERIFIED, and zero requires human review.
+
+Manual APIs are `POST /incidents` (existing `clusterId`, optional note), `GET /incidents/{id}`, and
+`GET /incidents/{id}/report`. Stub Adapters and the Feign-timeout fixture are deterministic test
+seams, not production integrations. Deep Path has no remediation or recovery semantics.
+
 ## Three-tier cascade merge (core)
 
 The Analyzer is the hub of the system. Most exceptions are resolved for free at L1/L2; only ~1% actually call the LLM.

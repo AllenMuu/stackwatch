@@ -2,6 +2,9 @@ package com.stackwatch.metrics;
 
 import com.stackwatch.domain.AnalysisPath;
 import com.stackwatch.domain.ReviewLevel;
+import com.stackwatch.incident.domain.IncidentStatus;
+import com.stackwatch.incident.toolset.ToolResultStatus;
+import com.stackwatch.incident.toolset.Toolset;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -61,6 +64,13 @@ public class AnalysisMetrics {
     private static final String TOKEN_METRIC = METRIC_PREFIX + "token_cost_total";
     /** 根因复核级别分布 Counter 指标名（tag: level）。 */
     private static final String REVIEW_LEVEL_METRIC = METRIC_PREFIX + "review_level_total";
+    private static final String INCIDENT_TRIGGER_METRIC = METRIC_PREFIX + "incident_trigger_total";
+    private static final String INCIDENT_LIFECYCLE_METRIC = METRIC_PREFIX + "incident_lifecycle_total";
+    private static final String INCIDENT_TOOL_RESULT_METRIC = METRIC_PREFIX + "incident_tool_result_total";
+    private static final String INCIDENT_EVIDENCE_METRIC = METRIC_PREFIX + "incident_evidence_count";
+    private static final String INCIDENT_REVIEW_METRIC = METRIC_PREFIX + "incident_review_outcome_total";
+    private static final String INCIDENT_EVALUATION_METRIC = METRIC_PREFIX + "incident_evaluation_total";
+    private static final String INCIDENT_DURATION_METRIC = METRIC_PREFIX + "incident_duration_seconds";
 
     private static final String TAG_PATH = "path";
     private static final String TAG_APP = "appName";
@@ -183,6 +193,93 @@ public class AnalysisMetrics {
             return;
         }
         reviewLevelCounters.get(level).increment();
+    }
+
+    /** Records one trigger using a fixed, low-cardinality trigger label. */
+    public void recordIncidentTrigger(String triggerType) {
+        Counter.builder(INCIDENT_TRIGGER_METRIC)
+            .description("Deep Path incident triggers")
+            .tag("trigger", incidentLabel(triggerType, "fast_path", "manual"))
+            .register(meterRegistry)
+            .increment();
+    }
+
+    /** Records a lifecycle state transition using the enum's fixed vocabulary. */
+    public void recordIncidentLifecycle(IncidentStatus status) {
+        if (status == null) {
+            return;
+        }
+        Counter.builder(INCIDENT_LIFECYCLE_METRIC)
+            .description("Deep Path incident lifecycle transitions")
+            .tag("state", status.name().toLowerCase(java.util.Locale.ROOT))
+            .register(meterRegistry)
+            .increment();
+    }
+
+    /** Records a normalized Toolset result without accepting adapter IDs or messages as tags. */
+    public void recordIncidentToolResult(Toolset toolset, ToolResultStatus status) {
+        if (toolset == null || status == null) {
+            return;
+        }
+        Counter.builder(INCIDENT_TOOL_RESULT_METRIC)
+            .description("Deep Path Toolset results")
+            .tag("tool", toolset.configuredName())
+            .tag("status", status.name().toLowerCase(java.util.Locale.ROOT))
+            .register(meterRegistry)
+            .increment();
+    }
+
+    /** Records the number of evidence items in a report as a distribution, not an ID-bearing tag. */
+    public void recordIncidentEvidenceCount(int evidenceCount) {
+        if (evidenceCount < 0) {
+            return;
+        }
+        DistributionSummary.builder(INCIDENT_EVIDENCE_METRIC)
+            .description("Evidence items attached to Deep Path reports")
+            .register(meterRegistry)
+            .record(evidenceCount);
+    }
+
+    /** Records the report review gate outcome with a bounded label vocabulary. */
+    public void recordIncidentReviewOutcome(IncidentStatus outcome) {
+        if (outcome == null) {
+            return;
+        }
+        Counter.builder(INCIDENT_REVIEW_METRIC)
+            .description("Deep Path report review outcomes")
+            .tag("outcome", incidentLabel(outcome.name(), "completed", "needs_human_review", "failed"))
+            .register(meterRegistry)
+            .increment();
+    }
+
+    /** Records a fixture/evaluation result with only pass/fail/other labels. */
+    public void recordIncidentEvaluation(String result) {
+        Counter.builder(INCIDENT_EVALUATION_METRIC)
+            .description("Deep Path deterministic evaluation outcomes")
+            .tag("result", incidentLabel(result, "passed", "failed"))
+            .register(meterRegistry)
+            .increment();
+    }
+
+    /** Records bounded Deep Path runtime latency. */
+    public void recordIncidentDuration(long nanos) {
+        if (nanos < 0) {
+            return;
+        }
+        Timer.builder(INCIDENT_DURATION_METRIC)
+            .description("Deep Path investigation duration")
+            .register(meterRegistry)
+            .record(nanos, TimeUnit.NANOSECONDS);
+    }
+
+    private static String incidentLabel(String value, String... allowed) {
+        String normalized = value == null ? "other" : value.trim().toLowerCase(java.util.Locale.ROOT);
+        for (String candidate : allowed) {
+            if (candidate.equals(normalized)) {
+                return candidate;
+            }
+        }
+        return "other";
     }
 
     /** 枚举转 Prometheus tag 小写蛇形值，与口径 cache_hit/vector_merged/llm_new 对齐。 */

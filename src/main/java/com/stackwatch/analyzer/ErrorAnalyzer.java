@@ -12,17 +12,21 @@ import com.stackwatch.domain.ReviewLevel;
 import com.stackwatch.domain.RootCauseAnalysis;
 import com.stackwatch.feedback.AntiPatternRepository;
 import com.stackwatch.feedback.FewShotRepository;
+import com.stackwatch.incident.runtime.IncidentEscalator;
 import com.stackwatch.metrics.AnalysisMetrics;
 import com.stackwatch.preprocess.EmbeddingService;
 import com.stackwatch.preprocess.Fingerprinter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -70,6 +74,7 @@ public class ErrorAnalyzer {
     private final FewShotRepository fewShotRepository;
     private final AntiPatternRepository antiPatternRepository;
     private final ContextOptimizer contextOptimizer;
+    private final IncidentEscalator incidentEscalator;
 
     public ErrorAnalyzer(Fingerprinter fingerprinter,
                          EmbeddingService embeddingService,
@@ -83,6 +88,24 @@ public class ErrorAnalyzer {
                          FewShotRepository fewShotRepository,
                          AntiPatternRepository antiPatternRepository,
                          ContextOptimizer contextOptimizer) {
+        this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
+            IncidentEscalator.NOOP);
+    }
+
+    public ErrorAnalyzer(Fingerprinter fingerprinter,
+                         EmbeddingService embeddingService,
+                         FingerprintCache fingerprintCache,
+                         ClusterRepository clusterRepository,
+                         ChatClient chatClient,
+                         AnalysisTools analysisTools,
+                         AnalysisProperties properties,
+                         PromptTemplateHolder promptTemplate,
+                         AnalysisMetrics metrics,
+                         FewShotRepository fewShotRepository,
+                         AntiPatternRepository antiPatternRepository,
+                         ContextOptimizer contextOptimizer,
+                         IncidentEscalator incidentEscalator) {
         this.fingerprinter = fingerprinter;
         this.embeddingService = embeddingService;
         this.fingerprintCache = fingerprintCache;
@@ -95,6 +118,26 @@ public class ErrorAnalyzer {
         this.fewShotRepository = fewShotRepository;
         this.antiPatternRepository = antiPatternRepository;
         this.contextOptimizer = contextOptimizer;
+        this.incidentEscalator = Objects.requireNonNull(incidentEscalator, "incidentEscalator is required");
+    }
+
+    @Autowired
+    public ErrorAnalyzer(Fingerprinter fingerprinter,
+                         EmbeddingService embeddingService,
+                         FingerprintCache fingerprintCache,
+                         ClusterRepository clusterRepository,
+                         ChatClient chatClient,
+                         AnalysisTools analysisTools,
+                         AnalysisProperties properties,
+                         PromptTemplateHolder promptTemplate,
+                         AnalysisMetrics metrics,
+                         FewShotRepository fewShotRepository,
+                         AntiPatternRepository antiPatternRepository,
+                         ContextOptimizer contextOptimizer,
+                         ObjectProvider<IncidentEscalator> incidentEscalatorProvider) {
+        this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
+            incidentEscalatorProvider.getIfAvailable(() -> IncidentEscalator.NOOP));
     }
 
     public AnalysisResult analyze(ErrorEvent event) {
@@ -106,7 +149,7 @@ public class ErrorAnalyzer {
         if (cached.isPresent()) {
             log.debug("L1 cache hit: {}", fp.hash());
             metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
-            return AnalysisResult.cacheHit(fp.hash(), cached.get());
+            return completeFastPath(event, AnalysisResult.cacheHit(fp.hash(), cached.get()));
         }
 
         // L2: 向量近似归并
@@ -119,7 +162,8 @@ public class ErrorAnalyzer {
                 fingerprintCache.put(fp.hash(), updated.analysis());
                 log.debug("L2 vector merged: {} -> cluster {}", fp.hash(), updated.clusterId());
                 metrics.recordAnalysis(AnalysisPath.VECTOR_MERGED, event.appName(), System.nanoTime() - start);
-                return AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis());
+                return completeFastPath(event,
+                    AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis()));
             }
         }
 
@@ -138,7 +182,20 @@ public class ErrorAnalyzer {
         log.info("L3 llm new: {} -> cluster {} (confidence={}, reviewLevel={})",
             fp.hash(), clusterId, analyzed.confidence(), reviewLevel);
         metrics.recordAnalysis(AnalysisPath.LLM_NEW, event.appName(), System.nanoTime() - start);
-        return AnalysisResult.llmNew(fp.hash(), clusterId, analyzed, reviewLevel);
+        AnalysisResult fastPathResult = AnalysisResult.llmNew(fp.hash(), clusterId, analyzed, reviewLevel);
+        return completeFastPath(event, fastPathResult);
+    }
+
+    private AnalysisResult completeFastPath(ErrorEvent event, AnalysisResult result) {
+        try {
+            incidentEscalator.escalate(event, result);
+        } catch (RuntimeException exception) {
+            // Deep Path is explicitly best-effort; a persistence or scheduling outage must not
+            // change the synchronous Fast Path result or its latency contract.
+            log.warn("Deep incident escalation failed for cluster {}: {}", result.clusterId(),
+                exception.getMessage());
+        }
+        return result;
     }
 
     private RootCauseAnalysis callLlm(ErrorEvent event, ErrorFingerprint fp) {

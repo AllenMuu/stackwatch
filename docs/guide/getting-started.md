@@ -47,3 +47,21 @@ L2 is off by default. Enabling it requires synchronized changes in three places:
 3. Set `stackwatch.l2.enabled=true` and configure `spring.datasource`
 
 See [Architecture](/guide/architecture) for the full L1/L2/L3 cascade design.
+
+## Enabling Deep Path
+
+Deep Path is disabled by default and does not affect zero-infrastructure startup. To enable it,
+provide PostgreSQL and set:
+
+```bash
+export INCIDENT_DATASOURCE_URL=jdbc:postgresql://localhost:5432/stackwatch
+export INCIDENT_DATASOURCE_USERNAME=stackwatch
+export INCIDENT_DATASOURCE_PASSWORD=change-me
+mvn spring-boot:run -Dspring-boot.run.arguments=--stackwatch.incident.enabled=true
+```
+
+Flyway creates the `stackwatch_incident` schema. The runtime is asynchronous and bounded by
+`stackwatch.incident.max-steps`, `max-tool-calls`, `tool-call-timeout`, and `total-timeout`.
+Only read-only Toolsets are registered; Stub Adapters return deterministic fixture data and should
+be replaced with deployment-configured adapters for real operations. Failed calls remain
+Observations/missing evidence and are never promoted to Evidence.

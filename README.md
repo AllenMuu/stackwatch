@@ -77,6 +77,19 @@ Two defenses sit in front of the LLM to keep prompts lean and the token bill dow
 - **Semantic caching (L2)**. L2 is a semantic cache, not just an approximate merge: a new error whose embedding is ≥ 0.92 similar to an existing cluster returns that cluster's root cause with zero LLM call. On hit, the result is **back-filled into L1**, so subsequent identical fingerprints resolve at L1 -- the cache gradient is self-reinforcing. This is the ideal scenario for RCA, where one root cause surfaces as many stack-trace instances with different literals.
 - **Context optimization**. `ContextOptimizer` truncates the prompt vars (`exceptionMessage`, `mdc`) and every `@Tool` return value before they reach the LLM. Production exception messages can carry full SQL / response bodies, and `queryTraceContext` against SkyWalking/ARMS can return tens of thousands of characters per trace -- without this gate the context window blows up and hallucination risk rises. Thresholds are configurable via `stackwatch.context-optimizer.*`.
 
+### Deep incident investigation (opt-in)
+
+Deep Path is disabled by default. Set `stackwatch.incident.enabled=true` and configure the
+`INCIDENT_DATASOURCE_URL`, `INCIDENT_DATASOURCE_USERNAME`, and `INCIDENT_DATASOURCE_PASSWORD`
+environment variables to enable the PostgreSQL/Flyway audit store; this is independent of L2.
+Qualifying Fast Path clusters are escalated asynchronously, so the original `/analyze` response is
+never delayed or changed. Only server-registered, read-only Logs, Trace, and Git/Deployment
+Toolsets run with a fixed incident scope. Results are redacted and hashed before persistence;
+failures/timeouts become Observations plus missing-evidence entries and cannot become Evidence.
+Use `POST /incidents` with an existing `clusterId`, then `GET /incidents/{id}` and
+`GET /incidents/{id}/report`. Stub Adapters and the Feign-timeout evaluator are deterministic test
+seams, not production integrations; no remediation or recovery is performed.
+
 ## Requirements
 
 - **JDK 21+** — required by Spring Boot 4.1 + Spring AI 2.0 (Java 8/11/17 not supported)
