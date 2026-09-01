@@ -217,7 +217,8 @@ public final class DeepInvestigationRuntime {
             persistStep(running, decision, steps + 1, terminalReason);
         }
         repository.saveReport(buildReport(running, observations, missingEvidence, terminalReason));
-        Incident terminal = running.needsHumanReview(clock.instant());
+        Incident terminal = running.transitionTo(IncidentStatus.NEEDS_HUMAN_REVIEW, clock.instant(),
+            terminalReason == null ? "investigation stopped" : terminalReason);
         if (terminalReason != null && terminalReason.contains("provider failure")) {
             terminal = running.fail(terminalReason, clock.instant());
         }

@@ -68,6 +68,7 @@ class DeepInvestigationRuntimeTest {
         Incident finished = runtime.run(repository.incident.id());
 
         assertThat(finished.status()).isEqualTo(IncidentStatus.NEEDS_HUMAN_REVIEW);
+        assertThat(finished.failureReason()).isEqualTo("maximum tool-call count exceeded");
         assertThat(repository.observations).hasSize(2);
         assertThat(repository.steps).extracting(InvestigationStep::outcome)
             .last().isEqualTo("maximum tool-call count exceeded");
