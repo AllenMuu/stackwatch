@@ -33,7 +33,7 @@ by the five delta specs. No blocking drift was found.
 ## 5. Implementation Signal
 
 - [x] Worktree has no unstaged files.
-- Commit range from merge-base contains 20 implementation/documentation commits, ending at `ba94c80`.
+- Commit range from merge-base contains 22 implementation/documentation commits, ending at `2280134`.
 - PostgreSQL Testcontainers scenarios are present but skipped because Docker is unavailable on this host.
 
 ## 6. Front-Door Routing Leak Detector
@@ -50,4 +50,4 @@ by the five delta specs. No blocking drift was found.
 
 Warnings are limited to the unavailable Docker daemon (12 integration tests skipped) and the
 expected Mockito/Byte Buddy host-agent requirement in sandboxed runs. The host-enabled full suite
-passes: `jenv exec mvn -o test` — 88 passed, 12 skipped.
+passes: `jenv exec mvn -o test` — 90 passed, 12 skipped.

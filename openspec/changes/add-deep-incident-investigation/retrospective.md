@@ -1,22 +1,22 @@
 # Retrospective: add-deep-incident-investigation
 
 > Written: 2026-09-01 (after verify passed)
-> Commit range: `9a95ff2b97ceaa327f7ac2ffea26f8ba2ece13bf..560edf1`
+> Commit range: `9a95ff2b97ceaa327f7ac2ffea26f8ba2ece13bf..2280134`
 > Worktree: `/Users/allenj/work/AllenMuu/stackwatch/.worktrees/add-deep-incident-investigation`
 
 ---
 
 ## 0. Evidence
 
-- **Commit range**: 20 commits
-- **Diff size**: +5,674 / -4 lines across 88 files
+- **Commit range**: 22 commits
+- **Diff size**: +5,870 / -4 lines across 89 files
 - **Tasks done**: 17/17 (`tasks.md`)
 - **Active hours**: approximately 8 hours across 2026-08-31 to 2026-09-01
 - **Subagent dispatches**: 3 implementation/review agents
 - **New external dependencies**: PostgreSQL JDBC, Flyway, and Testcontainers (versions managed by the Spring Boot parent); no new runtime provider dependency
 - **Bugs encountered post-merge**: 2 controller-test defects (Mockito matcher mixing and invalid RUNNING transition), fixed in `462dfd9`
 - **OpenSpec validate state at archive**: pass (`2/2` items valid)
-- **Test coverage signal**: 88 passed, 12 skipped in host-enabled `jenv exec mvn -o test`; 35 focused tests passed in sandbox
+- **Test coverage signal**: 90 passed, 12 skipped in host-enabled `jenv exec mvn -o test`; 35 focused tests passed in sandbox
 
 Commit chain (high level): PostgreSQL foundation → immutable audit model → deterministic Skills/Toolsets →
 five redaction/evidence hardening rounds → bounded runtime/escalation → APIs/metrics/evaluator → docs and
@@ -37,6 +37,7 @@ verification (`fb63d35..560edf1`).
 - 🟡 PostgreSQL Testcontainers coverage could not execute because Docker was unavailable; 12 tests remain skipped (`verify.md` §5).
 - 🟡 Sandbox Maven runs cannot attach Mockito's Byte Buddy agent; host-enabled execution is required for Mockito suites.
 - 📌 Delta specs for four new capabilities still need `/opsx:sync` into `openspec/specs/` (`verify.md` §3).
+- 🟡 Manual requests initially used an `unknown` environment and could fork an active incident; the controller now reuses the application/cluster active environment (`2280134`).
 
 ## 3. Plan deviations
 
