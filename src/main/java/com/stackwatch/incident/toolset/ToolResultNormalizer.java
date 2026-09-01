@@ -20,7 +20,8 @@ final class ToolResultNormalizer {
         "(?i)(?<![A-Za-z0-9_])(?:['\"])?(?:" + SECRET_FIELD
             + ")(?:['\"])?\\s*[:=]\\s*(['\"])");
     private static final Pattern SECRET_ASSIGNMENT_PREFIX = Pattern.compile(
-        "(?i)(?:['\"])?(?:" + SECRET_FIELD + ")(?:['\"])?\\s*[:=]");
+        "(?i)(?<![A-Za-z0-9_])(?:\\\\)*['\"]?(?:" + SECRET_FIELD
+            + ")[\\\"']?(?:\\\\)*\\s*[:=]");
     private static final Pattern SECRET_FIELD_NAME = Pattern.compile(
         "(?i)(?:" + SECRET_FIELD + ")");
     private static final Pattern BARE_SECRET = Pattern.compile(
@@ -62,12 +63,126 @@ final class ToolResultNormalizer {
     }
 
     private static String redact(String value) {
-        String escapedJsonRedacted = redactEscapedJsonSecrets(value);
-        String jsonRedacted = JSON_STRING_SECRET.matcher(escapedJsonRedacted)
-            .replaceAll("$1[REDACTED]$2");
-        String quotedRedacted = redactQuotedSecrets(jsonRedacted);
-        String bareRedacted = BARE_SECRET.matcher(quotedRedacted).replaceAll("$1[REDACTED]");
-        return URL.matcher(bareRedacted).replaceAll("[REDACTED_URL]");
+        return URL.matcher(redactAssignments(value)).replaceAll("[REDACTED_URL]");
+    }
+
+    /**
+     * Fail-closed redaction for nested/escaped and malformed assignments. Once a secret key is
+     * found, its value is hidden up to the next secret key (or end of input), so an unterminated
+     * value cannot consume a later key and leak its value.
+     */
+    private static String redactAssignments(String value) {
+        Matcher fields = SECRET_FIELD_NAME.matcher(value);
+        StringBuilder redacted = new StringBuilder(value.length());
+        int from = 0;
+        while (fields.find(from)) {
+            if ((fields.start() > 0 && isIdentifierCharacter(value.charAt(fields.start() - 1)))
+                || (fields.end() < value.length()
+                    && isIdentifierCharacter(value.charAt(fields.end())))) {
+                from = fields.end();
+                continue;
+            }
+            int delimiter = findAssignmentDelimiter(value, fields.end());
+            if (delimiter < 0) {
+                from = fields.end();
+                continue;
+            }
+
+            int valueStart = skipWhitespace(value, delimiter + 1);
+            int openingEnd = valueStart;
+            while (openingEnd < value.length() && value.charAt(openingEnd) == '\\') {
+                openingEnd++;
+            }
+            char quote = openingEnd < value.length() ? value.charAt(openingEnd) : 0;
+            if (quote == '\'' || quote == '"') {
+                openingEnd++;
+            } else {
+                quote = 0;
+                openingEnd = valueStart;
+            }
+
+            int nextField = findNextSecretAssignment(value, openingEnd);
+            int valueEnd = nextField < 0 ? value.length() : nextField;
+            boolean closed = false;
+            int closingQuote = -1;
+            if (quote != 0) {
+                for (int index = openingEnd; index < valueEnd; index++) {
+                    if (value.charAt(index) != quote) {
+                        continue;
+                    }
+                    int precedingSlashes = 0;
+                    for (int cursor = index - 1;
+                         cursor >= openingEnd && value.charAt(cursor) == '\\'; cursor--) {
+                        precedingSlashes++;
+                    }
+                    if ((precedingSlashes & 1) == 1) {
+                        continue;
+                    }
+                    if (index + 1 < valueEnd && value.charAt(index + 1) == quote) {
+                        index++;
+                        continue;
+                    }
+                    closingQuote = index;
+                    valueEnd = index + 1;
+                    closed = true;
+                    break;
+                }
+            } else {
+                valueEnd = findUnquotedValueEnd(value, valueStart, valueEnd);
+            }
+
+            redacted.append(value, from, quote == 0 ? valueStart : openingEnd)
+                .append("[REDACTED]");
+            if (closed) {
+                redacted.append(value, closingQuote, valueEnd);
+            }
+            from = valueEnd;
+        }
+        return redacted.append(value, from, value.length()).toString();
+    }
+
+    private static int findUnquotedValueEnd(String value, int from, int limit) {
+        for (int index = from; index < limit; index++) {
+            char current = value.charAt(index);
+            if (Character.isWhitespace(current) || current == ',' || current == ';'
+                || current == '}' || current == ']') {
+                return index;
+            }
+        }
+        return limit;
+    }
+
+    private static int findAssignmentDelimiter(String value, int from) {
+        int index = from;
+        while (index < value.length()) {
+            char current = value.charAt(index);
+            if (current == ':' || current == '=') {
+                return index;
+            }
+            if (!Character.isWhitespace(current) && current != '\\'
+                && current != '\"' && current != '\'') {
+                return -1;
+            }
+            index++;
+        }
+        return -1;
+    }
+
+    private static int findNextSecretAssignment(String value, int from) {
+        Matcher fields = SECRET_FIELD_NAME.matcher(value);
+        while (fields.find(from)) {
+            if ((fields.start() > 0 && isIdentifierCharacter(value.charAt(fields.start() - 1)))
+                || (fields.end() < value.length()
+                    && isIdentifierCharacter(value.charAt(fields.end())))) {
+                from = fields.end();
+                continue;
+            }
+            if (findAssignmentDelimiter(value, fields.end()) >= 0) {
+                return fields.start();
+            }
+            from = fields.end();
+        }
+        return -1;
     }
 
     private static String redactEscapedJsonSecrets(String value) {

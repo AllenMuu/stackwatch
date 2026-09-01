@@ -1,20 +1,20 @@
 ## 1. Feature configuration and PostgreSQL foundation
 
-- [ ] 1.1 Add independently disabled Incident configuration, datasource activation rules, Flyway, PostgreSQL driver, and Testcontainers dependencies.
-- [ ] 1.2 Create Flyway migrations for the `stackwatch_incident` schema and PostgreSQL-backed repository integration tests.
-- [ ] 1.3 Preserve and test zero-infrastructure startup when Incident and L2 are disabled.
+- [x] 1.1 Add independently disabled Incident configuration, datasource activation rules, Flyway, PostgreSQL driver, and Testcontainers dependencies.
+- [x] 1.2 Create Flyway migrations for the `stackwatch_incident` schema and PostgreSQL-backed repository integration tests.
+- [x] 1.3 Preserve and test zero-infrastructure startup when Incident and L2 are disabled.
 
 ## 2. Incident domain and persistence
 
-- [ ] 2.1 Add immutable Incident, trigger, step, observation, evidence, hypothesis, report, status, and decision domain types.
-- [ ] 2.2 Implement PostgreSQL repositories for Active Incident deduplication, audit persistence, report retrieval, and stale-running failure marking.
-- [ ] 2.3 Add unit tests for identity, lifecycle transitions, trigger append behavior, and evidence confirmation rules.
+- [x] 2.1 Add immutable Incident, trigger, step, observation, evidence, hypothesis, report, status, and decision domain types.
+- [x] 2.2 Implement PostgreSQL repositories for Active Incident deduplication, audit persistence, report retrieval, and stale-running failure marking.
+- [x] 2.3 Add unit tests for identity, lifecycle transitions, trigger append behavior, and evidence confirmation rules.
 
 ## 3. Skills, Toolsets, and evidence governance
 
-- [ ] 3.1 Add SKILL.md resource format, loader, deterministic matcher, and the three initial JVM Skills.
-- [ ] 3.2 Implement typed Toolset contracts, registry, executor, result normalization/redaction, and Logs, Trace, and Git/Deployment Stub Adapters.
-- [ ] 3.3 Enforce Toolset policy, safe input rejection, failure-to-Observation conversion, and Evidence threshold behavior with tests.
+- [x] 3.1 Add SKILL.md resource format, loader, deterministic matcher, and the three initial JVM Skills.
+- [x] 3.2 Implement typed Toolset contracts, registry, executor, result normalization/redaction, and Logs, Trace, and Git/Deployment Stub Adapters.
+- [x] 3.3 Enforce Toolset policy, safe input rejection, failure-to-Observation conversion, and Evidence threshold behavior with tests.
 
 ## 4. Bounded Deep Investigation runtime
 

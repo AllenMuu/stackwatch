@@ -1,9 +1,11 @@
 package com.stackwatch.incident;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.stackwatch.incident.domain.Incident;
 import com.stackwatch.incident.domain.IncidentTrigger;
+import com.stackwatch.incident.domain.Evidence;
 import com.stackwatch.incident.domain.Observation;
 import com.stackwatch.incident.toolset.GitDeploymentStubAdapter;
 import com.stackwatch.incident.toolset.LogsStubAdapter;
@@ -213,6 +215,27 @@ class ToolExecutorTest {
     }
 
     @Test
+    void redactsNestedEscapedJsonAndMalformedSecretValuesFailClosed() {
+        ToolExecutor executor = new ToolExecutor(
+            new ToolRegistry(List.of(new NestedEscapedJsonSecretFailingTraceAdapter())));
+
+        ToolResult result = executor.execute(INCIDENT, ToolRequest.forToolset(Toolset.TRACE));
+        Observation observation = result.toObservation(
+            UUID.randomUUID(), INCIDENT.id(), UUID.randomUUID(),
+            Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertSecretIsNotPersisted(result, observation, "deep-secret", "second-secret");
+    }
+
+    @Test
+    void rejectsAllNonSuccessObservationsAsEvidence() {
+        Observation failed = new Observation(UUID.randomUUID(), INCIDENT.id(), null, "TRACE", "TIMEOUT",
+            "failed", "stub", null, null, "hash", Instant.now());
+        assertThatThrownBy(() -> Evidence.requireEligibleObservation(failed))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void suppliesNormalizedDeterministicResultsForAllStubToolsets() {
         ToolExecutor executor = stubExecutor();
 
@@ -382,6 +405,20 @@ class ToolExecutorTest {
         public ToolRawResult execute(ToolScope scope) {
             throw new IllegalStateException(
                 "provider rejected {\\\"password\\\":\\\"stringified-secret\\\"}");
+        }
+    }
+
+    private static final class NestedEscapedJsonSecretFailingTraceAdapter implements ToolAdapter {
+
+        @Override
+        public Toolset toolset() {
+            return Toolset.TRACE;
+        }
+
+        @Override
+        public ToolRawResult execute(ToolScope scope) {
+            throw new IllegalStateException(
+                "provider rejected {\\\\\"password\\\\\":\\\\\"deep-secret\\\\\"} token=second-secret");
         }
     }
 
