@@ -85,3 +85,12 @@
   metrics, versioned Feign-timeout fixture, and scripted evaluator assertions.
 - Focused verification: `IncidentMetricsTest` and `IncidentEvaluatorTest` passed; controller tests
   compile but Mockito execution is blocked in this sandbox by Byte Buddy self-attach restrictions.
+
+## Task 6 complete
+
+- Documentation updated in `README.md`, `README_zh.md`, `docs/guide/architecture.md`, and
+  `docs/guide/getting-started.md` with opt-in PostgreSQL setup, API usage, read-only safety
+  boundaries, fixture limitations, and no-recovery semantics.
+- `openspec validate --all --json` — 2/2 items valid.
+- Full JDK 21 suite: `jenv exec mvn -o test` — 88 passed, 12 skipped (Docker unavailable for
+  PostgreSQL Testcontainers; LLM integration skipped without key).

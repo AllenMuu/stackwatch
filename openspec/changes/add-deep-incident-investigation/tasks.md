@@ -30,5 +30,5 @@
 
 ## 6. Verification and documentation
 
-- [ ] 6.1 Run focused unit tests, PostgreSQL Testcontainers tests, and the full Maven suite under JDK 21.
-- [ ] 6.2 Update architecture and operational documentation with Deep Path configuration, safety boundaries, and known limitations.
+- [x] 6.1 Run focused unit tests, PostgreSQL Testcontainers tests, and the full Maven suite under JDK 21.
+- [x] 6.2 Update architecture and operational documentation with Deep Path configuration, safety boundaries, and known limitations.
