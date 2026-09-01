@@ -94,3 +94,12 @@
 - `openspec validate --all --json` — 2/2 items valid.
 - Full JDK 21 suite: `jenv exec mvn -o test` — 88 passed, 12 skipped (Docker unavailable for
   PostgreSQL Testcontainers; LLM integration skipped without key).
+
+## Final security review hardening
+
+- Review found three P1 gaps: unsupported hypotheses could inherit all successful evidence, stale
+  RUNNING incidents were not recovered on restart, and manual cluster requests could fork active
+  incidents across environments.
+- Fixed by grounding hypothesis citations in observed summaries, adding startup stale-run recovery,
+  and reusing active application/cluster environments (`2280134`). Added regressions; final host suite
+  is 90 passed, 12 skipped.
