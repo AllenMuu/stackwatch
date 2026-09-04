@@ -113,12 +113,11 @@ public class ErrorEventCollector {
     private AnalysisResult buildAndAnalyze(
         String appName, String env, ThrowableInfo exception, Map<String, String> mdc) {
         ErrorEvent event = new ErrorEvent(
-            UUID.randomUUID().toString(),
-            appName,
-            env,
-            Instant.now(),
-            exception,
-            mdc
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity(UUID.randomUUID().toString(), appName, env),
+                Instant.now(),
+                mdc),
+            exception
         );
         log.debug("Collected error event: id={} type={} app={}",
             event.eventId(), event.exceptionType(), event.appName());

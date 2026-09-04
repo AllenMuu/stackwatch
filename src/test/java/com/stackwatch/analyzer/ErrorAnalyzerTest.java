@@ -2,6 +2,7 @@ package com.stackwatch.analyzer;
 
 import com.stackwatch.domain.AnalysisResult;
 import com.stackwatch.domain.ErrorEvent;
+import com.stackwatch.domain.ThrowableInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,14 +33,17 @@ class ErrorAnalyzerTest {
     @Test
     void shouldAnalyzeNpeAndReturnRootCause() {
         ErrorEvent event = new ErrorEvent(
-            "test-1", "order-service", "prod", Instant.now(),
-            "NullPointerException",
-            "Cannot invoke \"String.length()\" because \"order\" is null",
-            List.of(
-                "at com.foo.OrderService.process(OrderService.java:42)",
-                "at com.foo.OrderController.handle(OrderController.java:17)"
-            ),
-            Map.of("traceId", "trace-123")
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("test-1", "order-service", "prod"),
+                Instant.now(),
+                Map.of("traceId", "trace-123")),
+            new ThrowableInfo(
+                "NullPointerException",
+                "Cannot invoke \"String.length()\" because \"order\" is null",
+                List.of(
+                    "at com.foo.OrderService.process(OrderService.java:42)",
+                    "at com.foo.OrderController.handle(OrderController.java:17)"),
+                null)
         );
 
         AnalysisResult result = errorAnalyzer.analyze(event);

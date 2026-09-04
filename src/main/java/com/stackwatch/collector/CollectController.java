@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.JsonNode;
 
 /**
  * 采集层 HTTP 上报入口：POST /collect。
@@ -36,7 +37,12 @@ public class CollectController {
     }
 
     @PostMapping
-    public AnalysisResult collect(@RequestBody AnalyzeRequest request)
+    public AnalysisResult collect(@RequestBody JsonNode payload)
+        throws MethodArgumentNotValidException {
+        return collect(AnalyzeRequest.fromJson(payload));
+    }
+
+    AnalysisResult collect(AnalyzeRequest request)
         throws MethodArgumentNotValidException {
         ThrowableInfo exception = validatedException(request);
         return collector.collect(
@@ -60,7 +66,7 @@ public class CollectController {
     private static MethodParameter requestParameter() {
         try {
             return new MethodParameter(
-                CollectController.class.getDeclaredMethod("collect", AnalyzeRequest.class), 0);
+                CollectController.class.getDeclaredMethod("collect", JsonNode.class), 0);
         } catch (NoSuchMethodException e) {
             throw new IllegalStateException("Collect endpoint method is unavailable", e);
         }

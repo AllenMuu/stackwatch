@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import tools.jackson.databind.JsonNode;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -28,18 +29,21 @@ public class AnalysisController {
     }
 
     @PostMapping
-    public AnalysisResult analyze(@RequestBody AnalyzeRequest request) {
+    public AnalysisResult analyze(@RequestBody JsonNode payload) {
+        return analyze(AnalyzeRequest.fromJson(payload));
+    }
+
+    AnalysisResult analyze(AnalyzeRequest request) {
         if (request.hasMixedExceptionForms()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "exception and legacy exception fields are mutually exclusive");
         }
         ErrorEvent event = new ErrorEvent(
-            UUID.randomUUID().toString(),
-            request.appName(),
-            request.env(),
-            Instant.now(),
-            request.exceptionOrLegacy(),
-            request.mdc()
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity(UUID.randomUUID().toString(), request.appName(), request.env()),
+                Instant.now(),
+                request.mdc()),
+            request.exceptionOrLegacy()
         );
         return errorAnalyzer.analyze(event);
     }

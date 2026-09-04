@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.Map;
+import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -17,6 +19,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ErrorEventCollectorTest {
+
+    @Test
+    void createsRawEventFromComposedContext() {
+        ErrorEvent event = new ErrorEvent(
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("event-1", "orders", "prod"), Instant.EPOCH, Map.of()),
+            new ThrowableInfo("java.lang.RuntimeException", "request failed", List.of(), null));
+
+        assertEquals("event-1", event.eventId());
+        assertEquals("orders", event.appName());
+        assertEquals("java.lang.RuntimeException", event.exceptionType());
+    }
 
     @Test
     void capturesDirectThrowableCauseChain() {

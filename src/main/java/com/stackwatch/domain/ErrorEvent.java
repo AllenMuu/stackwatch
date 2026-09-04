@@ -9,53 +9,63 @@ import java.util.Map;
  * 不可变，遵循全局 immutability 原则。
  */
 public record ErrorEvent(
-    String eventId,
-    String appName,
-    String env,
-    Instant occurredAt,
-    ThrowableInfo exception,
-    Map<String, String> mdc
+    Context context,
+    ThrowableInfo exception
 ) {
     public ErrorEvent {
+        context = context == null ? Context.empty() : context;
         exception = exception == null ? new ThrowableInfo(null, null, List.of(), null) : exception;
-        mdc = mdc == null ? Map.of() : Map.copyOf(mdc);
     }
 
-    /**
-     * 兼容旧调用方的外层异常类型访问方式。
-     */
+    public String eventId() {
+        return context.identity().eventId();
+    }
+
+    public String appName() {
+        return context.identity().appName();
+    }
+
+    public String env() {
+        return context.identity().env();
+    }
+
+    public Instant occurredAt() {
+        return context.occurredAt();
+    }
+
+    public Map<String, String> mdc() {
+        return context.mdc();
+    }
+
     public String exceptionType() {
         return exception.type();
     }
 
-    /**
-     * 兼容旧调用方的外层异常消息访问方式。
-     */
     public String exceptionMessage() {
         return exception.message();
     }
 
-    /**
-     * 兼容旧调用方的外层堆栈访问方式。
-     */
     public List<String> stackTrace() {
         return exception.stackTrace();
     }
 
     /**
-     * 兼容旧调用方按拆解字段创建事件的方式。
+     * 事件的采集上下文，避免为原始事件构造传递过长的参数列表。
      */
-    public ErrorEvent(
-        String eventId,
-        String appName,
-        String env,
-        Instant occurredAt,
-        String exceptionType,
-        String exceptionMessage,
-        List<String> stackTrace,
-        Map<String, String> mdc
-    ) {
-        this(eventId, appName, env, occurredAt,
-            new ThrowableInfo(exceptionType, exceptionMessage, stackTrace, null), mdc);
+    public record Context(Identity identity, Instant occurredAt, Map<String, String> mdc) {
+        public Context {
+            identity = identity == null ? new Identity(null, null, null) : identity;
+            mdc = mdc == null ? Map.of() : Map.copyOf(mdc);
+        }
+
+        private static Context empty() {
+            return new Context(null, null, Map.of());
+        }
+    }
+
+    /**
+     * 可稳定标识事件来源的字段。
+     */
+    public record Identity(String eventId, String appName, String env) {
     }
 }

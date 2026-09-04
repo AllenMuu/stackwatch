@@ -2,6 +2,7 @@ package com.stackwatch.preprocess;
 
 import com.stackwatch.domain.ErrorEvent;
 import com.stackwatch.domain.ErrorFingerprint;
+import com.stackwatch.domain.ThrowableInfo;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -53,23 +54,27 @@ class FingerprinterTest {
     void shouldIgnoreLineNumbersAndFrameworkFrames() {
         // 同一调用路径，行号不同 + 框架帧不同 -> 业务帧足够时指纹应一致
         ErrorEvent withLineNumbers = new ErrorEvent(
-            "id1", "app", "prod", Instant.now(), "NullPointerException", "msg",
-            List.of(
-                "at com.foo.OrderService.process(OrderService.java:42)",
-                "at com.foo.OrderController.handle(OrderController.java:17)",
-                "at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)",
-                "at javax.servlet.http.HttpServlet.service(HttpServlet.java:623)"
-            ),
-            Map.of()
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id1", "app", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo(
+                "NullPointerException", "msg",
+                List.of(
+                    "at com.foo.OrderService.process(OrderService.java:42)",
+                    "at com.foo.OrderController.handle(OrderController.java:17)",
+                    "at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)",
+                    "at javax.servlet.http.HttpServlet.service(HttpServlet.java:623)"),
+                null)
         );
         ErrorEvent differentLines = new ErrorEvent(
-            "id2", "app", "prod", Instant.now(), "NullPointerException", "msg",
-            List.of(
-                "at com.foo.OrderService.process(OrderService.java:99)",
-                "at com.foo.OrderController.handle(OrderController.java:55)",
-                "at org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:117)"
-            ),
-            Map.of()
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id2", "app", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo(
+                "NullPointerException", "msg",
+                List.of(
+                    "at com.foo.OrderService.process(OrderService.java:99)",
+                    "at com.foo.OrderController.handle(OrderController.java:55)",
+                    "at org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:117)"),
+                null)
         );
 
         assertEquals(
@@ -83,12 +88,14 @@ class FingerprinterTest {
     void shouldFallbackToTopFramesWhenAppFramesInsufficient() {
         // 仅含框架帧时，应用帧不足 -> 回退到栈顶 N 帧，指纹仍可生成
         ErrorEvent event = new ErrorEvent(
-            "id", "app", "prod", Instant.now(), "NullPointerException", "msg",
-            List.of(
-                "at java.lang.String.substring(String.java:2000)",
-                "at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)"
-            ),
-            Map.of()
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id", "app", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo(
+                "NullPointerException", "msg",
+                List.of(
+                    "at java.lang.String.substring(String.java:2000)",
+                    "at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)"),
+                null)
         );
         ErrorFingerprint fp = fingerprinter.generate(event);
 
@@ -99,12 +106,18 @@ class FingerprinterTest {
     @Test
     void shouldIncludeExceptionTypeInFingerprint() {
         // 同一栈帧，不同异常类型 -> 指纹应不同
-        ErrorEvent npe = new ErrorEvent("id1", "app", "prod", Instant.now(),
-            "NullPointerException", "msg",
-            Arrays.asList("at com.foo.OrderService.process(OrderService.java:1)"), Map.of());
-        ErrorEvent illegalArg = new ErrorEvent("id2", "app", "prod", Instant.now(),
-            "IllegalArgumentException", "msg",
-            Arrays.asList("at com.foo.OrderService.process(OrderService.java:1)"), Map.of());
+        ErrorEvent npe = new ErrorEvent(
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id1", "app", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo(
+                "NullPointerException", "msg",
+                Arrays.asList("at com.foo.OrderService.process(OrderService.java:1)"), null));
+        ErrorEvent illegalArg = new ErrorEvent(
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id2", "app", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo(
+                "IllegalArgumentException", "msg",
+                Arrays.asList("at com.foo.OrderService.process(OrderService.java:1)"), null));
 
         assertNotEquals(
             fingerprinter.generate(npe).hash(),
@@ -118,9 +131,9 @@ class FingerprinterTest {
             .map(f -> "at " + f + "(Fake.java:1)")
             .toList();
         return new ErrorEvent(
-            "id", "order-service", "prod", Instant.now(),
-            "NullPointerException", "Cannot invoke method on null",
-            stack, Map.of()
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("id", "order-service", "prod"), Instant.now(), Map.of()),
+            new ThrowableInfo("NullPointerException", "Cannot invoke method on null", stack, null)
         );
     }
 }

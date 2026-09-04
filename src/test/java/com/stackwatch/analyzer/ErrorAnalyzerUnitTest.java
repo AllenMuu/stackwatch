@@ -9,6 +9,7 @@ import com.stackwatch.domain.ErrorCluster;
 import com.stackwatch.domain.ErrorEvent;
 import com.stackwatch.domain.RootCauseAnalysis;
 import com.stackwatch.domain.ReviewLevel;
+import com.stackwatch.domain.ThrowableInfo;
 import com.stackwatch.feedback.AntiPatternRepository;
 import com.stackwatch.feedback.FewShotRepository;
 import com.stackwatch.metrics.AnalysisMetrics;
@@ -348,15 +349,17 @@ class ErrorAnalyzerUnitTest {
 
     private ErrorEvent npeEvent() {
         return new ErrorEvent(
-            "test-1", "order-service", "prod",
-            Instant.parse("2026-07-08T10:00:00Z"),
-            "NullPointerException",
-            "Cannot invoke \"String.length()\" because \"order\" is null",
-            List.of(
-                "at com.foo.OrderService.process(OrderService.java:42)",
-                "at com.foo.OrderController.handle(OrderController.java:17)"
-            ),
-            Map.of("traceId", "trace-123")
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("test-1", "order-service", "prod"),
+                Instant.parse("2026-07-08T10:00:00Z"),
+                Map.of("traceId", "trace-123")),
+            new ThrowableInfo(
+                "NullPointerException",
+                "Cannot invoke \"String.length()\" because \"order\" is null",
+                List.of(
+                    "at com.foo.OrderService.process(OrderService.java:42)",
+                    "at com.foo.OrderController.handle(OrderController.java:17)"),
+                null)
         );
     }
 
