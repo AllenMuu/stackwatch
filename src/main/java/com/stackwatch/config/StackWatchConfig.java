@@ -33,6 +33,7 @@ import javax.sql.DataSource;
     FeishuProperties.class,
     FingerprintProperties.class,
     IncidentProperties.class
+    ,ErrorHistoryProperties.class
 })
 public class StackWatchConfig {
 
@@ -90,5 +91,22 @@ public class StackWatchConfig {
     @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
     DataSource incidentDataSource(DataSourceProperties properties) {
         return properties.initializeDataSourceBuilder().build();
+    }
+
+    /** Error history owns a separate lifecycle and is never created on the default fast path. */
+    @Bean
+    @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")
+    DataSource errorHistoryDataSource(ErrorHistoryProperties properties) {
+        return org.springframework.boot.jdbc.DataSourceBuilder.create()
+            .url(properties.url()).username(properties.username()).password(properties.password()).build();
+    }
+
+    @Bean(initMethod = "migrate")
+    @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")
+    org.flywaydb.core.Flyway errorHistoryFlyway(
+        @org.springframework.beans.factory.annotation.Qualifier("errorHistoryDataSource") DataSource dataSource) {
+        return org.flywaydb.core.Flyway.configure().dataSource(dataSource)
+            .schemas("stackwatch_error_history").createSchemas(true)
+            .locations("classpath:db/error-history").load();
     }
 }
