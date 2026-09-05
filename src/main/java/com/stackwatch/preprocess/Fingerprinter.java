@@ -86,11 +86,20 @@ public final class Fingerprinter {
             FingerprintRecordPart.exception(safe(error.effectiveExceptionType())),
             new FingerprintRecordPart(
                 FingerprintRecordPart.PartType.CUSTOM,
-                List.of("message=" + safe(error.normalizedRootCauseMessage()))),
+                List.of("strict-message=" + safe(error.normalizedRootCauseMessage()),
+                    "loose-message=omitted")),
             FingerprintRecordPart.frame(error.applicationFrames())
         );
         return ErrorFingerprint.v2(
             sha256(strict), sha256(loose), error.applicationFrames(), record);
+    }
+
+    /** Normalizes raw event facts exactly once, then renders the V2 identities. */
+    public ErrorFingerprint generateV2(ErrorEvent event, String appName, ErrorNormalizer normalizer) {
+        if (normalizer == null) {
+            throw new IllegalArgumentException("normalizer is required");
+        }
+        return generateV2(normalizer.normalize(event), appName);
     }
 
     /**

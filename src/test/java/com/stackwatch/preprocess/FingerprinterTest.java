@@ -4,6 +4,9 @@ import com.stackwatch.domain.ErrorEvent;
 import com.stackwatch.domain.ErrorFingerprint;
 import com.stackwatch.domain.ThrowableInfo;
 import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -80,7 +83,7 @@ class FingerprinterTest {
                 com.stackwatch.domain.FingerprintRecordPart.exception("java.sql.SQLException"),
                 new com.stackwatch.domain.FingerprintRecordPart(
                     com.stackwatch.domain.FingerprintRecordPart.PartType.CUSTOM,
-                    List.of("message=HTTP 500 from upstream")),
+                    List.of("strict-message=HTTP 500 from upstream", "loose-message=omitted")),
                 com.stackwatch.domain.FingerprintRecordPart.frame(
                     List.of("com.example.OrderRepository#load"))),
             fingerprint.record());
@@ -108,6 +111,18 @@ class FingerprinterTest {
         assertEquals(
             fingerprinter.generateV2(normalizer.normalize(completion), "orders").hash(),
             fingerprinter.generateV2(normalizer.normalize(execution), "orders").hash());
+    }
+
+    @Test
+    void eventV2BoundaryNormalizesExactlyOnce() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        ErrorEvent event = npeEvent("com.foo.OrderService.process");
+        NormalizedError normalized = normalized("HTTP 500 from upstream");
+        when(normalizer.normalize(event)).thenReturn(normalized);
+
+        fingerprinter.generateV2(event, "orders", normalizer);
+
+        verify(normalizer).normalize(event);
     }
 
     @Test

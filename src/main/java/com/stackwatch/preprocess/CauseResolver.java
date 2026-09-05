@@ -2,7 +2,10 @@ package com.stackwatch.preprocess;
 
 import com.stackwatch.config.FingerprintProperties;
 import com.stackwatch.domain.ThrowableInfo;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 /** Resolves the deepest typed non-wrapper node on the primary cause chain. */
 public final class CauseResolver {
@@ -25,8 +28,9 @@ public final class CauseResolver {
         int deepestTypedDepth = 0;
         int effectiveDepth = 0;
         int depth = 0;
+        Set<ThrowableInfo> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         ThrowableInfo current = outer;
-        while (current != null && depth <= MAX_CAUSE_DEPTH) {
+        while (current != null && depth < MAX_CAUSE_DEPTH && visited.add(current)) {
             if (hasType(current)) {
                 deepestTyped = current;
                 deepestTypedDepth = depth;

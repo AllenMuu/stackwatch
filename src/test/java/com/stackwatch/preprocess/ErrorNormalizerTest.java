@@ -10,6 +10,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ErrorNormalizerTest {
 
@@ -207,6 +209,37 @@ class ErrorNormalizerTest {
             throwable);
 
         assertEquals(normalizer.normalize(first), normalizer.normalize(second));
+    }
+
+    @Test
+    void resolverStopsAtRepeatedThrowableIdentity() {
+        FingerprintProperties properties = new FingerprintProperties(List.of(), List.of(), List.of());
+        CauseResolver resolver = new CauseResolver(properties);
+        ThrowableInfo repeated = mock(ThrowableInfo.class);
+        when(repeated.type()).thenReturn("java.lang.IllegalStateException");
+        when(repeated.message()).thenReturn("prefix");
+        when(repeated.stackTrace()).thenReturn(List.of());
+        when(repeated.cause()).thenReturn(repeated);
+
+        CauseResolver.ResolvedCause result = resolver.resolve(repeated);
+
+        assertEquals(repeated, result.effective());
+        assertEquals(0, result.depth());
+    }
+
+    @Test
+    void resolverStopsAtExactlyThirtyTwoNodes() {
+        FingerprintProperties properties = new FingerprintProperties(List.of(), List.of(), List.of());
+        CauseResolver resolver = new CauseResolver(properties);
+        ThrowableInfo chain = null;
+        for (int index = 32; index >= 0; index--) {
+            chain = new ThrowableInfo("type-" + index, "message", List.of(), chain);
+        }
+
+        CauseResolver.ResolvedCause result = resolver.resolve(chain);
+
+        assertEquals("type-31", result.effective().type());
+        assertEquals(31, result.depth());
     }
 
     private static ErrorNormalizer normalizer(List<String> applicationPackages) {
