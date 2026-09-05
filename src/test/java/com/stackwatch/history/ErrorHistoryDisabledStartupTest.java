@@ -77,8 +77,17 @@ class ErrorHistoryDisabledStartupTest {
         repo.record(new RecordOccurrenceCommand(v2, null, null));
         repo.record(new RecordOccurrenceCommand(v1, null, null));
         repo.record(new RecordOccurrenceCommand(otherApp, null, null));
-        assertThat(repo.findExact(v2.key())).contains(repo.findExact(v2.key()).orElseThrow());
-        assertThat(repo.findExact(v1.key())).isPresent();
-        assertThat(repo.findExact(otherApp.key())).isPresent();
+        ErrorGroup storedV2 = repo.findExact(v2.key()).orElseThrow();
+        ErrorGroup storedV1 = repo.findExact(v1.key()).orElseThrow();
+        ErrorGroup storedOtherApp = repo.findExact(otherApp.key()).orElseThrow();
+        assertThat(storedV2.id()).isEqualTo(v2.id());
+        assertThat(storedV1.id()).isEqualTo(v1.id()).isNotEqualTo(storedV2.id());
+        assertThat(storedOtherApp.id()).isEqualTo(otherApp.id())
+            .isNotEqualTo(storedV2.id()).isNotEqualTo(storedV1.id());
+        assertThat(storedV2.occurrenceCount()).isEqualTo(1);
+        assertThat(storedV1.occurrenceCount()).isEqualTo(1);
+        assertThat(storedOtherApp.occurrenceCount()).isEqualTo(1);
+        assertThat(repo.findExact(new ErrorGroupKey("billing", FingerprintVersion.V2, "unknown")))
+            .isEmpty();
     }
 }
