@@ -1,105 +1,43 @@
-# SDD ledger — plan: openspec/changes/add-deep-incident-investigation/plan.md
+# SDD ledger — plan: openspec/changes/evolve-error-group-identity/plan.md
 
-## Pre-flight scan
+## Pre-flight interface scan
 
-| Tasks / interface | Finding | Ruling |
-|---|---|---|
-| Task 1 → Task 2 | Task 1 provides Flyway schema and configuration; Task 2 consumes it for repository persistence. | Clean; schema foundation precedes repositories. |
-| Task 2 → Task 3 | Domain records provide Evidence/Observation and repository persistence; Toolsets convert results into those types. | Clean; keep domain independent of Toolset adapters. |
-| Task 3 → Task 4 | Runtime consumes Skill matcher and typed Tool Executor. | Clean; use interfaces rather than concrete Stub Adapters. |
-| Task 4 → Task 5 | APIs/evaluator consume runtime and report queries. | Clean; runtime must expose service-level entry points. |
-| Task 1 / runtime-platform spec | Existing default excludes datasource; Incident must enable only when feature flag is true. | Ruling: use conditional datasource/autoconfiguration configuration so disabled startup remains unchanged. |
+| Tasks | Shared file or interface | Finding |
+| --- | --- | --- |
+| 1 / 2 | `ErrorEvent.exception()` and `ThrowableInfo` | Task 1 produces the raw tree; Task 2 consumes it through `ErrorNormalizer`. No conflict. |
+| 2 / 3 | `FingerprintVersion`, V2 strict identity | Task 2 produces V2 hashes; Task 3 stores typed keys. No conflict. |
+| 3 / 4 | `ErrorGroupRepository`, `RecordOccurrenceCommand`, error-history migration | Task 3 defines contract/schema; Task 4 provides PostgreSQL implementation. No conflict. |
+| 3 / 5 | typed `ErrorGroup` cache target | Task 3 defines the target; Task 5 changes the cache and analyzer to consume it. No conflict. |
+| 4 / 5 | transactional occurrence result | Task 4 returns accepted/persisted group; Task 5 routes exact hits through it. No conflict. |
+| 5 / 6 | feature-flag behavior and verification claims | Task 6 documents only behavior proven by Task 5 tests. No conflict. |
+| 1 | Contract test versus implementation | Structured and legacy forms are mutually exclusive; controller validation is required. Consistent. |
+| 2 | Fixtures versus normalization implementation | Required token preservation and ordered masking are specified; new V2 API remains compatible with V1. Consistent. |
+| 3 | Default-startup requirement versus datasource creation | Conditional configuration avoids unconditional datasource creation. Consistent. |
+| 4 | Idempotency versus counter update | Event-ledger insert controls the single increment in one transaction. Consistent. |
+| 5 | Caffeine fast path versus durable occurrence mutation | Cache stores a group target, not bare RCA; mutation is not skipped. Consistent. |
+| 6 | Documentation versus unavailable Docker | Documentation and unit tests can proceed; Docker-dependent integration verification is explicitly environment-gated. Consistent. |
 
-## Environment
-
-- Baseline `jenv exec mvn test`: 16 Mockito errors caused by Byte Buddy self-attach being blocked on this macOS host, including existing ErrorAnalyzerUnitTest and FeedbackControllerUnitTest. Not caused by this change.
-- `mvn` without `jenv exec` uses JDK 26; all Maven commands for this plan use `jenv exec mvn`.
-
-## Task 1 review — round 1
-
-- P1: Flyway is enabled whenever another datasource exists, so L2 could run Incident migrations when Incident is disabled.
-- Ruling: Bind Flyway activation to `stackwatch.incident.enabled` and add a test proving Incident migrations do not activate merely because another datasource is present. This preserves the independent opt-in requirement in the binding spec.
-
-## Task 1 complete
-
-- Commits: `fb63d35`, `b6c0b84`.
-- Review: spec compliance PASS; task quality PASS after fix round 1.
-
-## Task 2 review — round 1
-
-- High: Report/hypothesis construction and save must enforce the zero/one/two independent-source verification gate; empty evidence requires UNKNOWN and human review.
-- High: Persisted lifecycle needs compare-and-set status transitions so a reused or stale aggregate cannot start a second worker or resurrect terminal state.
-- High: Evidence insertion must validate that its Observation belongs to the same Incident.
-- Medium: Preserve cited evidence and hypothesis audit links in persistence; update the schema if a link table is required.
-- Medium: Trigger/step persistence must advance incident `updated_at` used for stale-run detection; integration tests must exercise transactional behavior through the Spring proxy and include ownership/concurrency cases.
-- Ruling: Expand Task 2's migration/repository tests as necessary to enforce these invariants. This is required by the accepted evidence-governed and bounded-runtime specs, not scope expansion.
-
-## Task 2 review — round 2
-
-- High: The repository must derive source type and verification status from persisted Evidence rows by ID, not caller-supplied copies.
-- Medium: A report must persist its own cited-evidence set; later Evidence appends MUST NOT change the historical report view.
-- Low: Add a concurrent `startIfPending` integration assertion where practical.
-- Ruling: Add an explicit report-to-evidence link table/migration if needed and treat database facts as authoritative at every report write boundary.
-
-## Task 2 complete
-
-- Commits: `f710f46`, `687b2d5`, `25aad1a`, `b2996a5`.
-- Review: spec compliance PASS; task quality PASS after three fix rounds.
-
-## Task 3 review — round 1
-
-- P1: Tool scopes must be server-owned from Incident context/configuration, not arbitrary ToolRequest fields.
-- P1: Redaction must cover JSON/quoted token and authorization fields before Observation persistence, including adapter error messages.
-- P2: Add hostile-scope, path-shaped-name, JSON redaction, and Fast Path RCA matching tests.
-- P3: Refactor normalizer methods to fewer than five parameters.
-- Ruling: Preserve typed Toolset interfaces while moving scope construction inside the executor/runtime boundary; no untrusted caller controls a query selector.
-
-## Task 3 review — rounds 2–5
-
-- Round 2 found mixed-quote suffix leakage; scanner fix and regression tests added.
-- Round 3 found newline/unterminated quote leakage; fail-closed scanner fix and regression tests added.
-- Round 4 found chained/doubled-quote and escaped-JSON leakage plus Evidence status bypass; fixes and
-  ownership/evidence tests added.
-- Round 5 found nested twice-escaped JSON leakage and fail-open non-success statuses; the assignment
-  scanner was simplified to preserve syntax while redacting all value spans, and Evidence now uses a
-  trimmed case-insensitive `SUCCESS` allowlist.
-- Focused verification: `jenv exec mvn -o -Dtest=ToolExecutorTest test` — 15 passed.
-
-## Task 3 complete
-
-- Commits: `ae72d57`, `2dbe49e`, `fbc91ca`, `24305d4`, `38b63b0`, plus the round-5 hardening commit.
-- Review: spec compliance PASS after five fix rounds; task quality PASS.
-
-## Task 4 complete
-
-- Commits: `79ca8fb`, `897e654`, `e4258a3`, `0fba64c`.
-- Delivered structured scripted/LLM decisions, bounded asynchronous runtime, CAS lifecycle
-  transitions, timeout/step/tool limits, failure observations and missing-evidence persistence, and
-  best-effort escalation on all Fast Path paths with cluster-identity validation.
-- Focused verification: `jenv exec mvn -o -Dtest=DeepInvestigationRuntimeTest,IncidentMetricsTest,IncidentEvaluatorTest test` — 7 passed.
-
-## Task 5 complete
-
-- Commit: `3bed2bd`.
-- Delivered guarded POST `/incidents`, read-only status/report endpoints, bounded-label Deep Path
-  metrics, versioned Feign-timeout fixture, and scripted evaluator assertions.
-- Focused verification: `IncidentMetricsTest` and `IncidentEvaluatorTest` passed; controller tests
-  compile but Mockito execution is blocked in this sandbox by Byte Buddy self-attach restrictions.
-
-## Task 6 complete
-
-- Documentation updated in `README.md`, `README_zh.md`, `docs/guide/architecture.md`, and
-  `docs/guide/getting-started.md` with opt-in PostgreSQL setup, API usage, read-only safety
-  boundaries, fixture limitations, and no-recovery semantics.
-- `openspec validate --all --json` — 2/2 items valid.
-- Full JDK 21 suite: `jenv exec mvn -o test` — 88 passed, 12 skipped (Docker unavailable for
-  PostgreSQL Testcontainers; LLM integration skipped without key).
-
-## Final security review hardening
-
-- Review found three P1 gaps: unsupported hypotheses could inherit all successful evidence, stale
-  RUNNING incidents were not recovered on restart, and manual cluster requests could fork active
-  incidents across environments.
-- Fixed by grounding hypothesis citations in observed summaries, adding startup stale-run recovery,
-  and reusing active application/cluster environments (`2280134`). Added regressions; final host suite
-  is 90 passed, 12 skipped.
+Task 1: review failed — P2 public callable parameter-count violations; P2 missing JSON deserialization and HTTP 400 contract coverage.
+Task 1: fix round 1/5 (2 addressed, 1 open — source-compatible long constructors removed; commits b1c9cb4..dcff5c5)
+Task 1: Ruling: retain the composed constructors/factories with fewer than five parameters and do not restore legacy six-to-eight-argument Java constructors — the binding project style rule and the OpenSpec HTTP compatibility requirement take precedence; internal callers and JSON payloads remain compatible — cost if wrong: an untracked external Java consumer must migrate to the composed factory API.
+Task 1: complete (commits c5e8ae9..dcff5c5, 1 parked)
+Task 2: review failed — High missing identity-based cycle detection in CauseResolver; Medium max-depth off-by-one; Medium no enforced normalize-before-V2 boundary; Minor/quality mismatch between loose hash input and retained message record.
+Task 2: fix round 1/5 (4 addressed, 0 open — commits f200f9f..abce250e)
+Task 2: minor (deferred): implementer could not reproduce the RED baseline because the worktree already had partial Task 2 files; focused and full GREEN suites passed.
+Task 2: complete (commits dcff5c5..abce250e, 1 deferred minor)
+Task 3: review failed — P1 model parameter-limit violation; P1 nullable loose fingerprint; P1 cluster_id UUID/String mismatch; P1 unrelated tracked report overwrite; P2 datasource property-shape mismatch; P1 simultaneous Incident/history wiring unverified; P2 narrow model/schema coverage.
+Task 3: fix round 1/5 (7 addressed, 0 open — commits 31009d4..c9963ea)
+Task 3: re-review PASS with one P2 test-quality finding; follow-up removed tautological cross-app/version assertion and added independent IDs/counts/unknown-key checks (baf506b).
+Task 3: complete (commits 611b78d..baf506b, PostgreSQL dual-datasource migration remains Docker-gated/unverified)
+Task 4: review failed — P1 dual-datasource JdbcTemplate/transaction-manager binding could redirect Incident to History; P2 cross-identity duplicate event could create an empty group; P2 blank eventId semantics diverged.
+Task 4: fix round 1/5 (all addressed — commits 7ff4d60..5d46a02; test transaction-manager alias in 631a13d)
+Task 4: re-review PASS; compile and non-Docker focused tests pass, PostgreSQL/Incident Testcontainers suites skipped because Docker is unavailable.
+Task 4: complete (commits 7890668..5d46a02, plus 631a13d test binding)
+Task 5: review failed — P2 exact-hit persistence failure could continue into V1 reuse; P2 new-group duplicate record result ignored, allowing non-authoritative RCA return.
+Task 5: fix round 1/5 (both addressed — c2ce70a; 21 analyzer tests pass)
+Task 5: re-review PASS; exact-hit failure disables durable compatibility lookup and duplicate persistence uses authoritative stored group/RCA.
+Task 5: complete (commits c9397e0..c2ce70a)
+Task 6: review failed — P2 docs described V1 as fully read-only although V1 hits still record occurrence counts.
+Task 6: fix round 1/5 (clarified migration/re-keying read-only semantics in README and guides — 743f447)
+Task 6: re-review PASS; configuration examples, V2/V1 behavior, degradation, stable eventId, and #6 boundary are accurate.
+Task 6: complete (commits a5b69af..743f447; full suite 141 passed, 22 skipped without Docker/LLM)
