@@ -39,8 +39,9 @@ The exception flows through the five-layer pipeline:
 6. **Notifier** pushes a Feishu alert if configured
 
 The exact V2 key is application name + fingerprint version + strict fingerprint. The loose V2
-fingerprint is not an RCA or occurrence-merge key. V1 groups are read-only compatibility data;
-new groups are always written as V2.
+fingerprint is not an RCA or occurrence-merge key. V1 groups are compatibility data that are
+read-only with respect to migration/re-keying; V1 hits still record accepted occurrence counts.
+New groups are always written as V2.
 
 ## Durable error history (optional)
 

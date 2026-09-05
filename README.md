@@ -114,8 +114,9 @@ stackwatch:
 ```
 
 This datasource and migration are independent of both `stackwatch.incident.enabled` and
-`stackwatch.l2.enabled`. New groups are written as V2. V1 is only a read-only compatibility
-lookup, so existing V1 groups are not silently rewritten or merged into V2. If history lookup or
+`stackwatch.l2.enabled`. New groups are written as V2. V1 is read-only with respect to migration
+and re-keying; V1 hits still record accepted occurrence counts. Existing V1 groups are never silently
+rewritten or merged into V2. If history lookup or
 occurrence persistence fails, StackWatch logs and instruments the degradation and continues with
 the non-durable L2/L3 analysis path.
 

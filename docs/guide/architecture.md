@@ -109,8 +109,9 @@ Set `stackwatch.error-history.enabled=true` and configure its nested
 PostgreSQL migration and repository. This datasource is independent from the Incident datasource
 and from L2; when the flag is absent or false, no history datasource or migration is created.
 
-New exact groups are V2-primary. The analyzer checks V2 first, then performs a V1 read-only
-compatibility lookup; it never silently migrates V1 data. A non-blank stable
+New exact groups are V2-primary. The analyzer checks V2 first, then performs a V1 compatibility
+lookup that is read-only with respect to migration/re-keying; V1 hits still record accepted
+occurrence counts. It never silently migrates V1 data. A non-blank stable
 `ErrorEvent.Context.Identity.eventId` is required for retry-safe occurrence counting. Missing or
 blank IDs count every submission. The built-in HTTP endpoints generate a new UUID for each request,
 so they should not be treated as retry-idempotent unless an upstream integration preserves the
