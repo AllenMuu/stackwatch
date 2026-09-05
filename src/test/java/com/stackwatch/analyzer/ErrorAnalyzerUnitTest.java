@@ -7,14 +7,22 @@ import com.stackwatch.domain.AnalysisResult;
 import com.stackwatch.domain.AntiPattern;
 import com.stackwatch.domain.ErrorCluster;
 import com.stackwatch.domain.ErrorEvent;
+import com.stackwatch.domain.ErrorFingerprint;
 import com.stackwatch.domain.RootCauseAnalysis;
 import com.stackwatch.domain.ReviewLevel;
 import com.stackwatch.domain.ThrowableInfo;
 import com.stackwatch.feedback.AntiPatternRepository;
 import com.stackwatch.feedback.FewShotRepository;
+import com.stackwatch.history.ErrorGroup;
+import com.stackwatch.history.ErrorGroupKey;
+import com.stackwatch.history.ErrorGroupRepository;
+import com.stackwatch.history.RecordOccurrenceCommand;
+import com.stackwatch.history.RecordOccurrenceResult;
 import com.stackwatch.metrics.AnalysisMetrics;
 import com.stackwatch.preprocess.EmbeddingService;
+import com.stackwatch.preprocess.ErrorNormalizer;
 import com.stackwatch.preprocess.Fingerprinter;
+import com.stackwatch.preprocess.NormalizedError;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -36,11 +44,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * ErrorAnalyzer 纯单元测试：不依赖 LLM API Key，CI 可跑。
@@ -345,6 +356,204 @@ class ErrorAnalyzerUnitTest {
         String promptText = promptCaptor.getValue();
         assertTrue(promptText.contains("误判为配置缺失"), "prompt 应包含 anti-pattern 的误判根因警示");
         assertTrue(promptText.contains("实际是 order 字段未初始化"), "prompt 应包含 anti-pattern 的正确根因");
+    }
+
+    @Test
+    void typedCacheHitRecordsOccurrenceBeforeReturningRca() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        ErrorFingerprint fingerprint = v2Fingerprint(normalized);
+        ErrorGroupKey key = new ErrorGroupKey("order-service", fingerprint.version(), fingerprint.hash());
+        ErrorGroup group = historyGroup(key, fingerprint, normalized, highConfidenceRca());
+        ErrorGroup recordedGroup = group.acceptedAt(npeEvent().occurredAt());
+        when(fingerprintCache.lookup(key)).thenReturn(Optional.of(group));
+        when(history.record(any(RecordOccurrenceCommand.class)))
+            .thenReturn(new RecordOccurrenceResult(recordedGroup, true));
+        AnalysisMetrics historyMetrics = mock(AnalysisMetrics.class);
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, historyMetrics).analyze(npeEvent());
+
+        assertEquals(AnalysisPath.CACHE_HIT, result.path());
+        assertEquals(recordedGroup.analysis(), result.analysis());
+        assertEquals(recordedGroup.clusterId(), result.clusterId());
+        verify(history).record(argThat(command -> "test-1".equals(command.eventId())));
+        verify(fingerprintCache).put(eq(key), eq(recordedGroup));
+        verify(history, never()).findExact(any(ErrorGroupKey.class));
+        verify(chatClient, never()).prompt();
+        verify(embeddingService, never()).embed(any());
+        verify(normalizer, times(1)).normalize(any());
+    }
+
+    @Test
+    void repositoryHitWarmsTypedCacheAfterOccurrenceRecording() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        ErrorFingerprint fingerprint = v2Fingerprint(normalized);
+        ErrorGroupKey key = new ErrorGroupKey("order-service", fingerprint.version(), fingerprint.hash());
+        ErrorGroup group = historyGroup(key, fingerprint, normalized, highConfidenceRca());
+        when(fingerprintCache.lookup(key)).thenReturn(Optional.empty());
+        when(history.findExact(key)).thenReturn(Optional.of(group));
+        ErrorGroup recordedGroup = group.acceptedAt(npeEvent().occurredAt());
+        when(history.record(any(RecordOccurrenceCommand.class)))
+            .thenReturn(new RecordOccurrenceResult(recordedGroup, true));
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, mock(AnalysisMetrics.class))
+            .analyze(npeEvent());
+
+        assertEquals(AnalysisPath.CACHE_HIT, result.path());
+        assertEquals(fingerprint.hash(), result.fingerprintHash());
+        verify(history).record(any(RecordOccurrenceCommand.class));
+        verify(fingerprintCache).put(eq(key), eq(recordedGroup));
+        verify(chatClient, never()).prompt();
+    }
+
+    @Test
+    void v1HistoryHitIsReadOnlyCompatibilityAndNotRewrittenAsV2() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        Fingerprinter fingerprinter = new Fingerprinter(FINGERPRINT_TOP_N);
+        ErrorFingerprint v1 = fingerprinter.generate(npeEvent());
+        ErrorGroupKey v1Key = new ErrorGroupKey("order-service", v1.version(), v1.hash());
+        ErrorGroup group = historyGroup(v1Key, v1, normalized, highConfidenceRca());
+        when(fingerprintCache.lookup(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(v1Key)).thenReturn(Optional.of(group));
+        when(history.record(any(RecordOccurrenceCommand.class)))
+            .thenReturn(new RecordOccurrenceResult(group.acceptedAt(npeEvent().occurredAt()), true));
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, mock(AnalysisMetrics.class))
+            .analyze(npeEvent());
+
+        assertEquals(AnalysisPath.CACHE_HIT, result.path());
+        assertEquals(v1.hash(), result.fingerprintHash());
+        verify(fingerprintCache).put(eq(v1Key), any(ErrorGroup.class));
+        verify(fingerprintCache, never()).put(
+            argThat(cacheKey -> cacheKey.fingerprintVersion().name().equals("V2")), any(ErrorGroup.class));
+        verify(chatClient, never()).prompt();
+    }
+
+    @Test
+    void l2NewGroupIsPersistedAndCacheWarmedWithV2Target() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        when(fingerprintCache.lookup(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.record(any(RecordOccurrenceCommand.class))).thenAnswer(invocation -> {
+            RecordOccurrenceCommand command = invocation.getArgument(0);
+            return new RecordOccurrenceResult(command.group().acceptedAt(command.occurredAt()), true);
+        });
+        float[] vec = {0.1f, 0.2f};
+        when(embeddingService.embed(any())).thenReturn(vec);
+        ErrorCluster existing = ErrorCluster.newOne(
+            "cluster-existing", "order-service", "NullPointerException", "rep-hash",
+            Instant.parse("2026-07-08T08:00:00Z"), highConfidenceRca(), vec);
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.of(existing));
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, mock(AnalysisMetrics.class))
+            .analyze(npeEvent());
+
+        assertEquals(AnalysisPath.VECTOR_MERGED, result.path());
+        ArgumentCaptor<RecordOccurrenceCommand> commandCaptor =
+            ArgumentCaptor.forClass(RecordOccurrenceCommand.class);
+        verify(history).record(commandCaptor.capture());
+        assertEquals(com.stackwatch.domain.FingerprintVersion.V2,
+            commandCaptor.getValue().group().key().fingerprintVersion());
+        verify(fingerprintCache).put(
+            argThat(key -> key.fingerprintVersion().name().equals("V2")), any(ErrorGroup.class));
+        verify(chatClient, never()).prompt();
+    }
+
+    @Test
+    void historyOutageFallsBackToL3AndRecordsDegradation() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        when(normalizer.normalize(any())).thenReturn(normalizedError("Order 981273 not found"));
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        when(fingerprintCache.lookup(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(any(ErrorGroupKey.class)))
+            .thenThrow(new IllegalStateException("history unavailable"));
+        doThrow(new IllegalStateException("history unavailable"))
+            .when(history).record(any(RecordOccurrenceCommand.class));
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(highConfidenceRca());
+        AnalysisMetrics historyMetrics = mock(AnalysisMetrics.class);
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, historyMetrics).analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        assertEquals(highConfidenceRca(), result.analysis());
+        verify(historyMetrics).recordHistoryFailure("lookup_v2");
+        verify(historyMetrics).recordHistoryFailure("record");
+        verify(chatClient).prompt();
+    }
+
+    @Test
+    void looseFingerprintNeverProvidesAutomaticRcaReuse() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        when(normalizer.normalize(any())).thenReturn(normalizedError("Order 981273 not found"));
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        when(fingerprintCache.lookup(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(highConfidenceRca());
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, mock(AnalysisMetrics.class))
+            .analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        verify(chatClient).prompt();
+        verify(history, times(2)).findExact(any(ErrorGroupKey.class));
+    }
+
+    private ErrorAnalyzer historyAnalyzer(ErrorNormalizer normalizer,
+                                          ErrorGroupRepository history,
+                                          AnalysisMetrics historyMetrics) {
+        FewShotRepository fewShotRepository = mock(FewShotRepository.class);
+        when(fewShotRepository.findByExceptionType(anyString(), anyInt())).thenReturn(List.of());
+        return new ErrorAnalyzer(
+            new Fingerprinter(FINGERPRINT_TOP_N), embeddingService, fingerprintCache,
+            clusterRepository, chatClient, analysisTools,
+            new AnalysisProperties(
+                SIMILARITY_THRESHOLD, CONFIDENCE_THRESHOLD, CONFIDENCE_HIGH_THRESHOLD, FINGERPRINT_TOP_N),
+            promptTemplate(), historyMetrics,
+            fewShotRepository, antiPatternRepository,
+            new ContextOptimizer(new ContextOptimizerProperties(2000, 1000, 4000)),
+            normalizer, history);
+    }
+
+    private static PromptTemplateHolder promptTemplate() {
+        try {
+            return new PromptTemplateHolder(new ClassPathResource("prompts/root-cause.st"));
+        } catch (IOException exception) {
+            throw new IllegalStateException("test prompt template is unavailable", exception);
+        }
+    }
+
+    private static NormalizedError normalizedError(String message) {
+        return new NormalizedError(
+            "NullPointerException", "NullPointerException", message, message,
+            List.of("com.foo.OrderService#process", "com.foo.OrderController#handle"), List.of(), 0);
+    }
+
+    private static ErrorFingerprint v2Fingerprint(NormalizedError normalized) {
+        return new Fingerprinter(FINGERPRINT_TOP_N).generateV2(normalized, "order-service");
+    }
+
+    private static ErrorGroup historyGroup(ErrorGroupKey key, ErrorFingerprint fingerprint,
+                                           NormalizedError normalized, RootCauseAnalysis analysis) {
+        return ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(java.util.UUID.randomUUID(), key),
+            new ErrorGroup.GroupFacts(fingerprint.looseHash() == null ? fingerprint.hash()
+                : fingerprint.looseHash(), normalized.outerExceptionType(),
+                normalized.effectiveExceptionType(), normalized.normalizedRootCauseMessage(),
+                normalized.applicationFrames()),
+            analysis, "cluster-history"));
     }
 
     private ErrorEvent npeEvent() {

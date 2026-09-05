@@ -71,6 +71,7 @@ public class AnalysisMetrics {
     private static final String INCIDENT_REVIEW_METRIC = METRIC_PREFIX + "incident_review_outcome_total";
     private static final String INCIDENT_EVALUATION_METRIC = METRIC_PREFIX + "incident_evaluation_total";
     private static final String INCIDENT_DURATION_METRIC = METRIC_PREFIX + "incident_duration_seconds";
+    private static final String HISTORY_FAILURE_METRIC = METRIC_PREFIX + "error_history_failure_total";
 
     private static final String TAG_PATH = "path";
     private static final String TAG_APP = "appName";
@@ -193,6 +194,15 @@ public class AnalysisMetrics {
             return;
         }
         reviewLevelCounters.get(level).increment();
+    }
+
+    /** Records a best-effort error-history degradation with a bounded operation label. */
+    public void recordHistoryFailure(String operation) {
+        Counter.builder(HISTORY_FAILURE_METRIC)
+            .description("Error-history lookup or occurrence persistence failures")
+            .tag("operation", incidentLabel(operation, "lookup_v2", "lookup_v1", "record"))
+            .register(meterRegistry)
+            .increment();
     }
 
     /** Records one trigger using a fixed, low-cardinality trigger label. */

@@ -19,6 +19,13 @@ public record AnalysisResult(
             ReviewLevel.fromReviewFlag(analysis.needHumanReview()));
     }
 
+    /** Creates an exact-hit result while retaining the durable group's cluster link. */
+    public static AnalysisResult cacheHit(String fingerprintHash, String clusterId,
+                                          RootCauseAnalysis analysis) {
+        return new AnalysisResult(fingerprintHash, clusterId, analysis, AnalysisPath.CACHE_HIT,
+            ReviewLevel.fromReviewFlag(analysis.needHumanReview()));
+    }
+
     public static AnalysisResult vectorMerged(String fingerprintHash, String clusterId, RootCauseAnalysis analysis) {
         return new AnalysisResult(fingerprintHash, clusterId, analysis, AnalysisPath.VECTOR_MERGED,
             ReviewLevel.fromReviewFlag(analysis.needHumanReview()));

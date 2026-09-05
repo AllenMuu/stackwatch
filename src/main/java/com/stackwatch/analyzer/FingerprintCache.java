@@ -3,6 +3,8 @@ package com.stackwatch.analyzer;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.stackwatch.config.CacheProperties;
+import com.stackwatch.history.ErrorGroup;
+import com.stackwatch.history.ErrorGroupKey;
 import com.stackwatch.domain.RootCauseAnalysis;
 import org.springframework.stereotype.Component;
 
@@ -18,20 +20,43 @@ import java.util.Optional;
 @Component
 public class FingerprintCache {
 
-    private final Cache<String, RootCauseAnalysis> cache;
+    private final Cache<ErrorGroupKey, ErrorGroup> groupCache;
+    /**
+     * Kept only for source compatibility with callers compiled against the pre-history API.
+     * ErrorAnalyzer uses the typed cache in the normal Spring wiring path.
+     */
+    private final Cache<String, RootCauseAnalysis> legacyCache;
 
     public FingerprintCache(CacheProperties properties) {
-        this.cache = Caffeine.newBuilder()
+        this.groupCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(properties.fingerprintTtlSeconds()))
+            .maximumSize(properties.fingerprintMaxSize())
+            .build();
+        this.legacyCache = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(properties.fingerprintTtlSeconds()))
             .maximumSize(properties.fingerprintMaxSize())
             .build();
     }
 
-    public Optional<RootCauseAnalysis> lookup(String fingerprintHash) {
-        return Optional.ofNullable(cache.getIfPresent(fingerprintHash));
+    /** Looks up a complete durable grouping target by its composite exact identity. */
+    public Optional<ErrorGroup> lookup(ErrorGroupKey key) {
+        return Optional.ofNullable(groupCache.getIfPresent(key));
     }
 
+    /** Warms the accelerator with the latest occurrence state returned by the repository. */
+    public void put(ErrorGroupKey key, ErrorGroup group) {
+        groupCache.put(key, group);
+    }
+
+    /** @deprecated use {@link #lookup(ErrorGroupKey)}. */
+    @Deprecated
+    public Optional<RootCauseAnalysis> lookup(String fingerprintHash) {
+        return Optional.ofNullable(legacyCache.getIfPresent(fingerprintHash));
+    }
+
+    /** @deprecated use {@link #put(ErrorGroupKey, ErrorGroup)}. */
+    @Deprecated
     public void put(String fingerprintHash, RootCauseAnalysis analysis) {
-        cache.put(fingerprintHash, analysis);
+        legacyCache.put(fingerprintHash, analysis);
     }
 }
