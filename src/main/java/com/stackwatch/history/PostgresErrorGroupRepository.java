@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 /** PostgreSQL-backed, idempotent error-group occurrence repository. */
 @Repository
@@ -30,7 +31,8 @@ public class PostgresErrorGroupRepository implements ErrorGroupRepository {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
 
-    public PostgresErrorGroupRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+    public PostgresErrorGroupRepository(@Qualifier("errorHistoryJdbcTemplate") JdbcTemplate jdbcTemplate,
+                                        ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
     }
@@ -60,7 +62,7 @@ public class PostgresErrorGroupRepository implements ErrorGroupRepository {
      * is checked, while the event primary key provides durable idempotency.
      */
     @Override
-    @Transactional
+    @Transactional(transactionManager = "errorHistoryTransactionManager")
     public RecordOccurrenceResult record(RecordOccurrenceCommand command) {
         Instant occurredAt = command.occurredAt() == null ? Instant.now() : command.occurredAt();
         ErrorGroup group = findOrCreate(command.group(), occurredAt);

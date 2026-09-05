@@ -17,6 +17,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -101,6 +104,22 @@ public class StackWatchConfig {
         return org.springframework.boot.jdbc.DataSourceBuilder.create()
             .url(properties.datasource().url()).username(properties.datasource().username())
             .password(properties.datasource().password()).build();
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")
+    JdbcTemplate errorHistoryJdbcTemplate(
+        @org.springframework.beans.factory.annotation.Qualifier("errorHistoryDataSource")
+        DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
+
+    @Bean(name = "errorHistoryTransactionManager")
+    @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")
+    PlatformTransactionManager errorHistoryTransactionManager(
+        @org.springframework.beans.factory.annotation.Qualifier("errorHistoryDataSource")
+        DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
     }
 
     @Bean(initMethod = "migrate")
