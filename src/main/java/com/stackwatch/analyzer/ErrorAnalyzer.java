@@ -225,10 +225,11 @@ public class ErrorAnalyzer {
             }
         }
         if (cached.isPresent()) {
-            Optional<AnalysisResult> exactHit = recordExactHit(event, v2Key, cached.get(), start);
-            if (exactHit.isPresent()) {
-                return exactHit.orElseThrow();
+            ExactHitOutcome exactHit = recordExactHit(event, v2Key, cached.get(), start);
+            if (exactHit.result().isPresent()) {
+                return exactHit.result().orElseThrow();
             }
+            historyAvailable = historyAvailable && exactHit.historyAvailable();
         }
 
         // Read-only compatibility lookup for groups created by the old V1 algorithm. Never write a
@@ -246,10 +247,11 @@ public class ErrorAnalyzer {
                 }
             }
             if (v1Group.isPresent()) {
-                Optional<AnalysisResult> exactHit = recordExactHit(event, v1Key, v1Group.get(), start);
-                if (exactHit.isPresent()) {
-                    return exactHit.orElseThrow();
+                ExactHitOutcome exactHit = recordExactHit(event, v1Key, v1Group.get(), start);
+                if (exactHit.result().isPresent()) {
+                    return exactHit.result().orElseThrow();
                 }
+                historyAvailable = historyAvailable && exactHit.historyAvailable();
             }
         }
 
@@ -273,12 +275,16 @@ public class ErrorAnalyzer {
                 clusterRepository.save(updated);
                 ErrorGroup group = newHistoryGroup(v2Key, normalized, v2, updated.clusterId(),
                     updated.analysis());
-                persistAndWarm(event, v2Key, group);
-                putLegacyIfNeeded(v2.hash(), updated.analysis());
-                log.debug("L2 vector merged: {} -> cluster {}", v2.hash(), updated.clusterId());
+                Optional<ErrorGroup> persisted = persistAndWarm(event, v2Key, group);
+                RootCauseAnalysis resultAnalysis = persisted.map(ErrorGroup::analysis)
+                    .orElse(updated.analysis());
+                String resultClusterId = persisted.map(ErrorGroup::clusterId)
+                    .orElse(updated.clusterId());
+                putLegacyIfNeeded(v2.hash(), resultAnalysis);
+                log.debug("L2 vector merged: {} -> cluster {}", v2.hash(), resultClusterId);
                 metrics.recordAnalysis(AnalysisPath.VECTOR_MERGED, event.appName(), System.nanoTime() - start);
                 return completeFastPath(event,
-                    AnalysisResult.vectorMerged(v2.hash(), updated.clusterId(), updated.analysis()));
+                    AnalysisResult.vectorMerged(v2.hash(), resultClusterId, resultAnalysis));
             }
         }
 
@@ -294,20 +300,28 @@ public class ErrorAnalyzer {
             v2.hash(), event.occurredAt(), analyzed, vec);
         clusterRepository.save(newCluster);
         ErrorGroup group = newHistoryGroup(v2Key, normalized, v2, clusterId, analyzed);
-        persistAndWarm(event, v2Key, group);
-        putLegacyIfNeeded(v2.hash(), analyzed);
+        Optional<ErrorGroup> persisted = persistAndWarm(event, v2Key, group);
+        RootCauseAnalysis resultAnalysis = persisted.map(ErrorGroup::analysis).orElse(analyzed);
+        String resultClusterId = persisted.map(ErrorGroup::clusterId).orElse(clusterId);
+        ReviewLevel resultReviewLevel = persisted
+            .filter(persistedGroup -> !persistedGroup.analysis().equals(analyzed))
+            .map(ErrorGroup::analysis)
+            .map(analysis -> ReviewLevel.fromReviewFlag(analysis.needHumanReview()))
+            .orElse(reviewLevel);
+        putLegacyIfNeeded(v2.hash(), resultAnalysis);
         log.info("L3 llm new: {} -> cluster {} (confidence={}, reviewLevel={})",
-            v2.hash(), clusterId, analyzed.confidence(), reviewLevel);
+            v2.hash(), resultClusterId, resultAnalysis.confidence(), resultReviewLevel);
         metrics.recordAnalysis(AnalysisPath.LLM_NEW, event.appName(), System.nanoTime() - start);
-        AnalysisResult fastPathResult = AnalysisResult.llmNew(v2.hash(), clusterId, analyzed, reviewLevel);
+        AnalysisResult fastPathResult = AnalysisResult.llmNew(
+            v2.hash(), resultClusterId, resultAnalysis, resultReviewLevel);
         return completeFastPath(event, fastPathResult);
     }
 
-    private Optional<AnalysisResult> recordExactHit(ErrorEvent event, ErrorGroupKey key,
-                                                    ErrorGroup cachedGroup, long start) {
+    private ExactHitOutcome recordExactHit(ErrorEvent event, ErrorGroupKey key,
+                                           ErrorGroup cachedGroup, long start) {
         if (cachedGroup.analysis() == null) {
             recordHistoryFailure("record", new IllegalStateException("exact group has no RCA"));
-            return Optional.empty();
+            return ExactHitOutcome.historyFailure();
         }
         try {
             RecordOccurrenceResult recorded = errorGroupRepository.record(
@@ -319,11 +333,11 @@ public class ErrorAnalyzer {
             fingerprintCache.put(key, group);
             metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
             log.debug("exact {} hit: {}", key.fingerprintVersion(), key.strictFingerprint());
-            return Optional.of(completeFastPath(event,
+            return ExactHitOutcome.success(completeFastPath(event,
                 AnalysisResult.cacheHit(key.strictFingerprint(), group.clusterId(), group.analysis())));
         } catch (RuntimeException exception) {
             recordHistoryFailure("record", exception);
-            return Optional.empty();
+            return ExactHitOutcome.historyFailure();
         }
     }
 
@@ -338,16 +352,38 @@ public class ErrorAnalyzer {
             analysis, clusterId));
     }
 
-    private void persistAndWarm(ErrorEvent event, ErrorGroupKey key, ErrorGroup group) {
+    private Optional<ErrorGroup> persistAndWarm(ErrorEvent event, ErrorGroupKey key, ErrorGroup group) {
         try {
             RecordOccurrenceResult recorded = errorGroupRepository.record(
                 RecordOccurrenceCommand.newGroup(group, event.eventId(), event.occurredAt()));
             if (recorded == null || recorded.group() == null) {
                 throw new IllegalStateException("history repository returned no new group");
             }
-            fingerprintCache.put(key, recorded.group());
+            ErrorGroup persisted = recorded.group();
+            if (persisted.analysis() == null) {
+                throw new IllegalStateException("history repository returned a group without RCA");
+            }
+            // A duplicate means another occurrence already owns this exact identity. Its RCA and
+            // cluster link are authoritative, even if the local L2/L3 candidate was different.
+            fingerprintCache.put(key, persisted);
+            return Optional.of(persisted);
         } catch (RuntimeException exception) {
             recordHistoryFailure("record", exception);
+            return Optional.empty();
+        }
+    }
+
+    private record ExactHitOutcome(Optional<AnalysisResult> result, boolean historyAvailable) {
+        private ExactHitOutcome {
+            result = result == null ? Optional.empty() : result;
+        }
+
+        private static ExactHitOutcome success(AnalysisResult result) {
+            return new ExactHitOutcome(Optional.of(result), true);
+        }
+
+        private static ExactHitOutcome historyFailure() {
+            return new ExactHitOutcome(Optional.empty(), false);
         }
     }
 

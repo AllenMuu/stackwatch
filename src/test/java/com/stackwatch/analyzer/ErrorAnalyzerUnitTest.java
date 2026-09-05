@@ -495,6 +495,63 @@ class ErrorAnalyzerUnitTest {
     }
 
     @Test
+    void exactHitRecordFailureSkipsV1DurableReuseBeforeFallback() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorFingerprint v2 = v2Fingerprint(normalized);
+        ErrorGroupKey v2Key = new ErrorGroupKey("order-service", v2.version(), v2.hash());
+        ErrorGroup cachedGroup = historyGroup(v2Key, v2, normalized, highConfidenceRca());
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        when(fingerprintCache.lookup(v2Key)).thenReturn(Optional.of(cachedGroup));
+        doThrow(new IllegalStateException("history unavailable"))
+            .when(history).record(any(RecordOccurrenceCommand.class));
+        when(callSpec.entity(RootCauseAnalysis.class)).thenReturn(highConfidenceRca());
+        AnalysisMetrics historyMetrics = mock(AnalysisMetrics.class);
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, historyMetrics).analyze(npeEvent());
+
+        assertEquals(AnalysisPath.LLM_NEW, result.path());
+        verify(history, never()).findExact(any(ErrorGroupKey.class));
+        verify(historyMetrics, times(2)).recordHistoryFailure("record");
+        verify(chatClient).prompt();
+    }
+
+    @Test
+    void duplicatePersistenceUsesAuthoritativeStoredRcaAndWarmsCache() {
+        ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
+        NormalizedError normalized = normalizedError("Order 981273 not found");
+        when(normalizer.normalize(any())).thenReturn(normalized);
+        ErrorGroupRepository history = mock(ErrorGroupRepository.class);
+        when(fingerprintCache.lookup(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        when(history.findExact(any(ErrorGroupKey.class))).thenReturn(Optional.empty());
+        RootCauseAnalysis authoritativeRca = new RootCauseAnalysis(
+            "持久化的历史根因", "DATABASE", "HIGH", 0.98,
+            "沿用已经确认的根因", List.of("DatabaseClient.java:9"), false);
+        ErrorFingerprint v2 = v2Fingerprint(normalized);
+        ErrorGroupKey key = new ErrorGroupKey("order-service", v2.version(), v2.hash());
+        ErrorGroup authoritativeGroup = historyGroup(key, v2, normalized, authoritativeRca)
+            .acceptedAt(npeEvent().occurredAt());
+        when(history.record(any(RecordOccurrenceCommand.class)))
+            .thenReturn(new RecordOccurrenceResult(authoritativeGroup, false));
+        when(embeddingService.embed(any())).thenReturn(new float[] {0.1f, 0.2f});
+        ErrorCluster existing = ErrorCluster.newOne(
+            "cluster-local", "order-service", "NullPointerException", "rep-hash",
+            Instant.parse("2026-07-08T08:00:00Z"), highConfidenceRca(), new float[] {0.1f, 0.2f});
+        when(clusterRepository.findSimilar(any(float[].class), anyDouble()))
+            .thenReturn(Optional.of(existing));
+
+        AnalysisResult result = historyAnalyzer(normalizer, history, mock(AnalysisMetrics.class))
+            .analyze(npeEvent());
+
+        assertEquals(AnalysisPath.VECTOR_MERGED, result.path());
+        assertEquals(authoritativeRca, result.analysis());
+        assertEquals(authoritativeGroup.clusterId(), result.clusterId());
+        verify(fingerprintCache).put(eq(key), eq(authoritativeGroup));
+        verify(chatClient, never()).prompt();
+    }
+
+    @Test
     void looseFingerprintNeverProvidesAutomaticRcaReuse() {
         ErrorNormalizer normalizer = mock(ErrorNormalizer.class);
         when(normalizer.normalize(any())).thenReturn(normalizedError("Order 981273 not found"));
