@@ -89,6 +89,7 @@ public class StackWatchConfig {
      */
     @Bean
     @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
+    @org.springframework.context.annotation.Primary
     DataSource incidentDataSource(DataSourceProperties properties) {
         return properties.initializeDataSourceBuilder().build();
     }
@@ -98,7 +99,8 @@ public class StackWatchConfig {
     @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")
     DataSource errorHistoryDataSource(ErrorHistoryProperties properties) {
         return org.springframework.boot.jdbc.DataSourceBuilder.create()
-            .url(properties.url()).username(properties.username()).password(properties.password()).build();
+            .url(properties.datasource().url()).username(properties.datasource().username())
+            .password(properties.datasource().password()).build();
     }
 
     @Bean(initMethod = "migrate")

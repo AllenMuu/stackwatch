@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.stackwatch.config.ErrorHistoryProperties;
 import com.stackwatch.domain.FingerprintVersion;
 import java.util.UUID;
+import java.time.Instant;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -34,10 +35,50 @@ class ErrorHistoryDisabledStartupTest {
     @Test
     void inMemoryRepositoryRecordsAnOccurrence() {
         ErrorGroupKey key = new ErrorGroupKey("billing", FingerprintVersion.V2, "strict");
-        ErrorGroup group = ErrorGroup.newGroup(UUID.randomUUID(), key, "loose", null, null,
-            null, null);
+        ErrorGroup group = ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(), key),
+            new ErrorGroup.GroupFacts("loose", null, null, null, null), null, null));
         RecordOccurrenceCommand command = RecordOccurrenceCommand.newGroup(group, "event-1",
             java.time.Instant.parse("2026-01-01T00:00:00Z"));
         assertThat(repository.record(command).group().occurrenceCount()).isEqualTo(1);
+    }
+
+    @Test
+    void duplicateEventIsIdempotentAndDistinctTimesAreOrdered() {
+        InMemoryErrorGroupRepository repo = new InMemoryErrorGroupRepository();
+        ErrorGroupKey key = new ErrorGroupKey("billing", FingerprintVersion.V2, "strict-2");
+        ErrorGroup group = ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(), key),
+            new ErrorGroup.GroupFacts("loose-2", null, null, null, null), null, "cluster-1"));
+        repo.record(new RecordOccurrenceCommand(group, "event-2", Instant.parse("2026-01-02T00:00:00Z")));
+        repo.record(new RecordOccurrenceCommand(group, "event-2", Instant.parse("2026-01-03T00:00:00Z")));
+        repo.record(new RecordOccurrenceCommand(group, "event-3", Instant.parse("2025-12-31T00:00:00Z")));
+        ErrorGroup result = repo.findExact(key).orElseThrow();
+        assertThat(result.occurrenceCount()).isEqualTo(2);
+        assertThat(result.firstSeen()).isEqualTo(Instant.parse("2025-12-31T00:00:00Z"));
+        assertThat(result.lastSeen()).isEqualTo(Instant.parse("2026-01-02T00:00:00Z"));
+    }
+
+    @Test
+    void exactIdentitySeparatesApplicationsAndVersions() {
+        InMemoryErrorGroupRepository repo = new InMemoryErrorGroupRepository();
+        ErrorGroup v2 = ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(),
+                new ErrorGroupKey("billing", FingerprintVersion.V2, "same")),
+            new ErrorGroup.GroupFacts("loose-a", null, null, null, null), null, null));
+        ErrorGroup v1 = ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(),
+                new ErrorGroupKey("billing", FingerprintVersion.V1, "same")),
+            new ErrorGroup.GroupFacts("loose-b", null, null, null, null), null, null));
+        ErrorGroup otherApp = ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(),
+                new ErrorGroupKey("orders", FingerprintVersion.V2, "same")),
+            new ErrorGroup.GroupFacts("loose-c", null, null, null, null), null, null));
+        repo.record(new RecordOccurrenceCommand(v2, null, null));
+        repo.record(new RecordOccurrenceCommand(v1, null, null));
+        repo.record(new RecordOccurrenceCommand(otherApp, null, null));
+        assertThat(repo.findExact(v2.key())).contains(repo.findExact(v2.key()).orElseThrow());
+        assertThat(repo.findExact(v1.key())).isPresent();
+        assertThat(repo.findExact(otherApp.key())).isPresent();
     }
 }

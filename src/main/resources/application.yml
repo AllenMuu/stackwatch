@@ -63,16 +63,17 @@ stackwatch:
   incident:
     # Deep Path 默认关闭，避免为既有 Fast Path 启动数据库或迁移。
     enabled: false
-  error-history:
-    # Durable exact identity history is independently opt-in.
-    enabled: false
-    url: ${ERROR_HISTORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
-    username: ${ERROR_HISTORY_DATASOURCE_USERNAME:stackwatch}
-    password: ${ERROR_HISTORY_DATASOURCE_PASSWORD:}
     max-steps: 6
     max-tool-calls: 3
     tool-call-timeout: 5s
     total-timeout: 30s
+  error-history:
+    # Durable exact identity history is independently opt-in.
+    enabled: false
+    datasource:
+      url: ${ERROR_HISTORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
+      username: ${ERROR_HISTORY_DATASOURCE_USERNAME:stackwatch}
+      password: ${ERROR_HISTORY_DATASOURCE_PASSWORD:}
   context-optimizer:
     # Prompt 异常消息字段截断上限（字符）；生产异常 message 可能含完整 SQL/响应体
     max-exception-message-length: 2000
