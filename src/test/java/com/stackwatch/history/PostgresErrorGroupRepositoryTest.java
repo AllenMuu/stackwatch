@@ -268,7 +268,7 @@ class PostgresErrorGroupRepositoryTest {
             return new ObjectMapper().findAndRegisterModules();
         }
 
-        @Bean
+        @Bean(name = {"transactionManager", "errorHistoryTransactionManager"})
         PlatformTransactionManager transactionManager(DataSource dataSource) {
             return new DataSourceTransactionManager(dataSource);
         }
