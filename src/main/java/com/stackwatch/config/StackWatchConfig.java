@@ -3,7 +3,11 @@ package com.stackwatch.config;
 import com.stackwatch.notifier.FeishuProperties;
 import com.stackwatch.preprocess.EmbeddingRendering;
 import com.stackwatch.preprocess.EmbeddingService;
+import com.stackwatch.preprocess.CauseResolver;
+import com.stackwatch.preprocess.ErrorNormalizer;
 import com.stackwatch.preprocess.Fingerprinter;
+import com.stackwatch.preprocess.MessageNormalizer;
+import com.stackwatch.preprocess.StackFrameNormalizer;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,6 +31,7 @@ import javax.sql.DataSource;
     ContextOptimizerProperties.class,
     DataSourceProperties.class,
     FeishuProperties.class,
+    FingerprintProperties.class,
     IncidentProperties.class
 })
 public class StackWatchConfig {
@@ -34,6 +39,31 @@ public class StackWatchConfig {
     @Bean
     Fingerprinter fingerprinter(AnalysisProperties properties) {
         return new Fingerprinter(properties.fingerprintTopN());
+    }
+
+    @Bean
+    CauseResolver causeResolver(FingerprintProperties properties) {
+        return new CauseResolver(properties);
+    }
+
+    @Bean
+    MessageNormalizer messageNormalizer(FingerprintProperties properties) {
+        return new MessageNormalizer(properties);
+    }
+
+    @Bean
+    StackFrameNormalizer stackFrameNormalizer(
+        FingerprintProperties fingerprintProperties, AnalysisProperties analysisProperties) {
+        return new StackFrameNormalizer(
+            fingerprintProperties, analysisProperties.fingerprintTopN());
+    }
+
+    @Bean
+    ErrorNormalizer errorNormalizer(
+        CauseResolver causeResolver,
+        MessageNormalizer messageNormalizer,
+        StackFrameNormalizer stackFrameNormalizer) {
+        return new ErrorNormalizer(causeResolver, messageNormalizer, stackFrameNormalizer);
     }
 
     @Bean

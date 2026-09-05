@@ -76,6 +76,23 @@ public final class Fingerprinter {
         return new ErrorFingerprint(hash, version, appFrames, record);
     }
 
+    /** Renders strict and loose V2 identities from already-normalized facts. */
+    public ErrorFingerprint generateV2(NormalizedError error, String appName) {
+        String strict = canonical(error, appName, true);
+        String loose = canonical(error, appName, false);
+        List<FingerprintRecordPart> record = List.of(
+            new FingerprintRecordPart(
+                FingerprintRecordPart.PartType.CUSTOM, List.of("app=" + safe(appName))),
+            FingerprintRecordPart.exception(safe(error.effectiveExceptionType())),
+            new FingerprintRecordPart(
+                FingerprintRecordPart.PartType.CUSTOM,
+                List.of("message=" + safe(error.normalizedRootCauseMessage()))),
+            FingerprintRecordPart.frame(error.applicationFrames())
+        );
+        return ErrorFingerprint.v2(
+            sha256(strict), sha256(loose), error.applicationFrames(), record);
+    }
+
     /**
      * 生成用于 embedding 的文本（带 rendering 策略，借鉴 PostHog）。
      */
@@ -106,5 +123,28 @@ public final class Fingerprinter {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    private static String canonical(NormalizedError error, String appName, boolean includeMessage) {
+        List<String> parts = new java.util.ArrayList<>();
+        parts.add("version=v2");
+        parts.add("app=" + escape(appName));
+        parts.add("exception=" + escape(error.effectiveExceptionType()));
+        if (includeMessage) {
+            parts.add("message=" + escape(error.normalizedRootCauseMessage()));
+        }
+        error.applicationFrames().forEach(frame -> parts.add("frame=" + escape(frame)));
+        return String.join("\n", parts);
+    }
+
+    private static String escape(String value) {
+        return safe(value)
+            .replace("\\", "\\\\")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n");
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
     }
 }

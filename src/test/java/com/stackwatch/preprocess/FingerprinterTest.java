@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -23,6 +24,91 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FingerprinterTest {
 
     private final Fingerprinter fingerprinter = new Fingerprinter(5);
+
+    @Test
+    void shouldPreserveV1CanonicalFingerprint() {
+        ErrorFingerprint fingerprint = fingerprinter.generate(
+            npeEvent("com.foo.OrderService.process", "com.foo.OrderController.handle"));
+
+        assertEquals(
+            "18ced847651b1a84647e35684c3bc76bb69628283d13f6f70e96b2f573731639",
+            fingerprint.hash());
+        assertEquals(com.stackwatch.domain.FingerprintVersion.V1, fingerprint.version());
+        assertNull(fingerprint.looseHash());
+    }
+
+    @Test
+    void shouldKeepSemanticMessageVariantsStrictButRelatedLoosely() {
+        NormalizedError unauthorized = normalized("HTTP 401 from upstream");
+        NormalizedError serverError = normalized("HTTP 500 from upstream");
+
+        ErrorFingerprint strict401 = fingerprinter.generateV2(unauthorized, "orders");
+        ErrorFingerprint strict500 = fingerprinter.generateV2(serverError, "orders");
+
+        assertNotEquals(strict401.hash(), strict500.hash());
+        assertEquals(strict401.looseHash(), strict500.looseHash());
+    }
+
+    @Test
+    void shouldScopeStrictAndLooseV2IdentityToApplication() {
+        NormalizedError normalized = normalized("HTTP 500 from upstream");
+
+        ErrorFingerprint orders = fingerprinter.generateV2(normalized, "orders");
+        ErrorFingerprint billing = fingerprinter.generateV2(normalized, "billing");
+
+        assertNotEquals(orders.hash(), billing.hash());
+        assertNotEquals(orders.looseHash(), billing.looseHash());
+    }
+
+    @Test
+    void shouldPinV2CanonicalRenderingAndExplainItsParts() {
+        ErrorFingerprint fingerprint = fingerprinter.generateV2(
+            normalized("HTTP 500 from upstream"), "orders");
+
+        assertEquals(com.stackwatch.domain.FingerprintVersion.V2, fingerprint.version());
+        assertEquals(
+            "665dfc20077c445dc74aeb7022572a63544d8abd0711c08e724434c62e8653c6",
+            fingerprint.hash());
+        assertEquals(
+            "2d219bccac2af1ed3ec3b8c0c11d01c786e2e840764c0ade3d68f2aed79b895b",
+            fingerprint.looseHash());
+        assertEquals(
+            List.of(
+                new com.stackwatch.domain.FingerprintRecordPart(
+                    com.stackwatch.domain.FingerprintRecordPart.PartType.CUSTOM,
+                    List.of("app=orders")),
+                com.stackwatch.domain.FingerprintRecordPart.exception("java.sql.SQLException"),
+                new com.stackwatch.domain.FingerprintRecordPart(
+                    com.stackwatch.domain.FingerprintRecordPart.PartType.CUSTOM,
+                    List.of("message=HTTP 500 from upstream")),
+                com.stackwatch.domain.FingerprintRecordPart.frame(
+                    List.of("com.example.OrderRepository#load"))),
+            fingerprint.record());
+    }
+
+    @Test
+    void shouldMakeEquivalentWrapperTypesShareV2Identity() {
+        ErrorNormalizer normalizer = new ErrorNormalizer(
+            new com.stackwatch.config.FingerprintProperties(
+                List.of("com.example"), List.of(), List.of()),
+            5);
+        ThrowableInfo root = new ThrowableInfo(
+            "java.sql.SQLException",
+            "Order 981273 not found",
+            List.of("at com.example.OrderRepository.load(OrderRepository.java:42)"),
+            null);
+        ErrorEvent completion = eventWithThrowable(
+            "orders",
+            new ThrowableInfo(
+                "java.util.concurrent.CompletionException", "failed", List.of(), root));
+        ErrorEvent execution = eventWithThrowable(
+            "orders",
+            new ThrowableInfo("java.util.concurrent.ExecutionException", "failed", List.of(), root));
+
+        assertEquals(
+            fingerprinter.generateV2(normalizer.normalize(completion), "orders").hash(),
+            fingerprinter.generateV2(normalizer.normalize(execution), "orders").hash());
+    }
 
     @Test
     void shouldGenerateDeterministicFingerprintForSameStack() {
@@ -135,5 +221,23 @@ class FingerprinterTest {
                 new ErrorEvent.Identity("id", "order-service", "prod"), Instant.now(), Map.of()),
             new ThrowableInfo("NullPointerException", "Cannot invoke method on null", stack, null)
         );
+    }
+
+    private static NormalizedError normalized(String message) {
+        return new NormalizedError(
+            new NormalizedError.Types(
+                "java.util.concurrent.CompletionException", "java.sql.SQLException"),
+            new NormalizedError.Messages("failed", message),
+            new NormalizedError.Frames(
+                List.of("com.example.OrderRepository#load"),
+                List.of("com.example.OrderRepository#load")),
+            1);
+    }
+
+    private static ErrorEvent eventWithThrowable(String appName, ThrowableInfo throwable) {
+        return new ErrorEvent(
+            new ErrorEvent.Context(
+                new ErrorEvent.Identity("event", appName, "prod"), Instant.EPOCH, Map.of()),
+            throwable);
     }
 }
