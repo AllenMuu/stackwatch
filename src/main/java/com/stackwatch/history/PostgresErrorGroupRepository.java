@@ -65,6 +65,14 @@ public class PostgresErrorGroupRepository implements ErrorGroupRepository {
     @Transactional(transactionManager = "errorHistoryTransactionManager")
     public RecordOccurrenceResult record(RecordOccurrenceCommand command) {
         Instant occurredAt = command.occurredAt() == null ? Instant.now() : command.occurredAt();
+        if (hasEventId(command.eventId())) {
+            String appName = command.group().key().appName();
+            lockEvent(appName, command.eventId());
+            Optional<UUID> acceptedGroupId = findAcceptedEventGroupId(appName, command.eventId());
+            if (acceptedGroupId.isPresent()) {
+                return new RecordOccurrenceResult(findById(acceptedGroupId.orElseThrow()).orElseThrow(), false);
+            }
+        }
         ErrorGroup group = findOrCreate(command.group(), occurredAt);
         if (!hasEventId(command.eventId())) {
             incrementWithMinMax(group.id(), occurredAt);
@@ -111,6 +119,12 @@ public class PostgresErrorGroupRepository implements ErrorGroupRepository {
     private void lockIdentity(ErrorGroupKey key) {
         String lockKey = key.appName() + "\u0000" + key.fingerprintVersion().name()
             + "\u0000" + key.strictFingerprint();
+        jdbcTemplate.queryForObject("SELECT pg_advisory_xact_lock(hashtext(?))",
+            (resultSet, rowNumber) -> Boolean.TRUE, lockKey);
+    }
+
+    private void lockEvent(String appName, String eventId) {
+        String lockKey = "event\u0000" + appName + "\u0000" + eventId;
         jdbcTemplate.queryForObject("SELECT pg_advisory_xact_lock(hashtext(?))",
             (resultSet, rowNumber) -> Boolean.TRUE, lockKey);
     }

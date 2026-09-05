@@ -23,11 +23,16 @@ public class InMemoryErrorGroupRepository implements ErrorGroupRepository {
     @Override
     public synchronized RecordOccurrenceResult record(RecordOccurrenceCommand command) {
         ErrorGroup current = groups.get(command.group().key());
-        if (command.eventId() != null && !acceptedEvents.add(command.group().key().appName() + "\u0000" + command.eventId())) {
+        if (hasEventId(command.eventId())
+            && !acceptedEvents.add(command.group().key().appName() + "\u0000" + command.eventId())) {
             return new RecordOccurrenceResult(current == null ? command.group() : current, false);
         }
         ErrorGroup next = (current == null ? command.group() : current).acceptedAt(command.occurredAt());
         groups.put(next.key(), next);
         return new RecordOccurrenceResult(next, true);
+    }
+
+    private boolean hasEventId(String eventId) {
+        return eventId != null && !eventId.isBlank();
     }
 }

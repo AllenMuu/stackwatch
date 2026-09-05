@@ -97,6 +97,22 @@ public class StackWatchConfig {
         return properties.initializeDataSourceBuilder().build();
     }
 
+    @Bean(name = "incidentJdbcTemplate")
+    @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
+    JdbcTemplate incidentJdbcTemplate(
+        @org.springframework.beans.factory.annotation.Qualifier("incidentDataSource")
+        DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
+
+    @Bean(name = "incidentTransactionManager")
+    @ConditionalOnProperty(prefix = "stackwatch.incident", name = "enabled", havingValue = "true")
+    PlatformTransactionManager incidentTransactionManager(
+        @org.springframework.beans.factory.annotation.Qualifier("incidentDataSource")
+        DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
+    }
+
     /** Error history owns a separate lifecycle and is never created on the default fast path. */
     @Bean
     @ConditionalOnProperty(prefix = "stackwatch.error-history", name = "enabled", havingValue = "true")

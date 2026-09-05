@@ -124,6 +124,25 @@ class PostgresErrorGroupRepositoryTest {
     }
 
     @Test
+    void duplicateEventForAnotherIdentityDoesNotCreateAnEmptyGroup() {
+        ErrorGroup firstIdentity = group("orders", FingerprintVersion.V2, "first-identity", false);
+        ErrorGroup secondIdentity = group("orders", FingerprintVersion.V2, "second-identity", false);
+
+        RecordOccurrenceResult first = repository.record(
+            new RecordOccurrenceCommand(firstIdentity, "shared-event", EARLY));
+        RecordOccurrenceResult duplicate = repository.record(
+            new RecordOccurrenceCommand(secondIdentity, "shared-event", LATE));
+
+        assertThat(first.accepted()).isTrue();
+        assertThat(duplicate.accepted()).isFalse();
+        assertThat(duplicate.group().id()).isEqualTo(first.group().id());
+        assertThat(repository.findExact(secondIdentity.key())).isEmpty();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM stackwatch_error_history.error_groups", Long.class))
+            .isEqualTo(1L);
+    }
+
+    @Test
     void countsEveryOccurrenceWhenEventIdIsMissing() {
         ErrorGroup group = group("orders", FingerprintVersion.V2, "without-event-id", false);
 

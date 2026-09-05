@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -38,7 +39,8 @@ public class PostgresIncidentRepository implements IncidentRepository {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
 
-    public PostgresIncidentRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+    public PostgresIncidentRepository(@Qualifier("incidentJdbcTemplate") JdbcTemplate jdbcTemplate,
+                                      ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
     }
@@ -48,7 +50,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
      * final database guard, and one transaction preserves both the trigger append and activity timestamp.
      */
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public Incident createOrReuse(String applicationName, String environment, String clusterId,
                                   IncidentTrigger trigger) {
         String activeKey = activeKey(applicationName, environment, clusterId);
@@ -109,7 +111,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
 
     /** Atomically claims one pending incident for a worker; all other callers observe an empty result. */
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public Optional<Incident> startIfPending(UUID incidentId, Instant startedAt) {
         Objects.requireNonNull(incidentId, "incidentId is required");
         Objects.requireNonNull(startedAt, "startedAt is required");
@@ -128,7 +130,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
      * expected state. This prevents stale workers from reviving or overwriting a completed incident.
      */
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public boolean updateIfCurrentStatus(Incident incident, IncidentStatus expectedStatus) {
         Objects.requireNonNull(incident, "incident is required");
         Objects.requireNonNull(expectedStatus, "expectedStatus is required");
@@ -146,7 +148,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public void appendStep(InvestigationStep step) {
         jdbcTemplate.update("""
             INSERT INTO stackwatch_incident.steps
@@ -159,7 +161,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public void appendObservation(Observation observation) {
         if (observation.stepId() != null) {
             requireOwnedRecord("steps", observation.stepId(), observation.incidentId());
@@ -177,7 +179,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public void appendEvidence(Evidence evidence) {
         Evidence.requireEligibleObservation(
             requireOwnedObservation(evidence.observationId(), evidence.incidentId()));
@@ -215,7 +217,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public void saveReport(IncidentReport report) {
         IncidentReport authoritativeReport = reportWithPersistedEvidence(report);
         jdbcTemplate.update("""
@@ -288,7 +290,7 @@ public class PostgresIncidentRepository implements IncidentRepository {
     }
 
     @Override
-    @Transactional
+    @Transactional(transactionManager = "incidentTransactionManager")
     public int markStaleRunningFailed(Instant staleBefore, Instant now) {
         return jdbcTemplate.update("""
             UPDATE stackwatch_incident.incidents
