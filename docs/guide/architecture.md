@@ -8,7 +8,7 @@ title: Architecture
 
 ```mermaid
 flowchart TD
-    C[① Collector<br/>Logback / HTTP / Kafka] --> P[② Preprocessor<br/>fingerprint dedup]
+    C[① Collector<br/>Logback / HTTP / Kafka] --> P[② Preprocessor<br/>raw -> normalized -> V2 identity]
     P --> A[③ Analyzer<br/>L1 / L2 / L3 cascade]
     A --> G[④ Aggregator<br/>surge detection + weekly]
     G --> N[⑤ Notifier<br/>Feishu alert + weekly report]
@@ -16,7 +16,31 @@ flowchart TD
     A -.-> F[Feedback<br/>few-shot flywheel]
 ```
 
-Data flow: `ErrorEventCollector` (collect) -> `Fingerprinter.generate` (preprocess) -> `ErrorAnalyzer.analyze` (L1->L2->L3) -> cluster lands in `ClusterRepository` -> `WeeklyAggregator`/`HighFrequencyDetector` (aggregate) -> `FeishuClient` (deliver).
+Data flow: `ErrorEventCollector` (raw collect) -> `ErrorNormalizer` (effective cause, message, and
+frame normalization) -> `Fingerprinter.generateV2` (strict/loose V2 identities) ->
+`ErrorAnalyzer.analyze` (exact history/L1 -> L2 -> L3) -> cluster lands in `ClusterRepository` ->
+`WeeklyAggregator`/`HighFrequencyDetector` (aggregate) -> `FeishuClient` (deliver).
+
+## Raw ingress and normalized V2 identity
+
+Collectors retain an immutable `ThrowableInfo` primary-cause chain with raw type, message, frames,
+and direct cause. They do not classify frames or rewrite messages. `ErrorNormalizer` subsequently
+selects the deepest typed non-wrapper cause (up to the safe cause-chain limit), chooses effective
+application frames before outer/raw fallbacks, and masks volatile UUID/IP/date/time/hash/ID/query
+values while preserving configured application error codes and semantic status tokens.
+
+V2 renders two SHA-256 values from the normalized application, effective exception type, message
+template, and selected frames:
+
+- `strictFingerprint` includes the normalized message and is the authoritative exact identity.
+- `looseFingerprint` omits the message and is non-authoritative; it cannot return an old RCA,
+  merge counts, or bypass L2/L3.
+
+The exact key is `(appName, FingerprintVersion, strictFingerprint)`, which keeps applications and
+V1/V2 algorithm versions isolated. Configure frame classification with
+`stackwatch.fingerprint.application-packages` (an allowlist when non-empty), plus
+`wrapper-exception-types` and `application-error-codes`. With no package allowlist, the existing
+framework-prefix denylist is used.
 
 ## Deep Path (opt-in)
 
@@ -48,7 +72,8 @@ The Analyzer is the hub of the system. Most exceptions are resolved for free at 
 
 ### L1 - Fingerprint cache
 
-`FingerprintCache` (Caffeine): exact fingerprint-hash hit -> reuse historical `RootCauseAnalysis`, 0 tokens.
+`FingerprintCache` (Caffeine): exact composite-key hit -> reuse the stored group/RCA, 0 tokens.
+The cache accelerates lookup but does not bypass durable occurrence recording.
 
 ### L2 - Vector merge
 
@@ -76,6 +101,24 @@ The project starts with **no DB / no Kafka / no vector store** by default, contr
 2. Each repository/channel selects its implementation via `@ConditionalOnProperty`
 
 `ClusterRepository` has two mutually exclusive implementations selected by `stackwatch.l2.enabled`: `InMemoryClusterRepository` (default, `findSimilar` always returns empty, forcing L3) vs `PgVectorClusterRepository`.
+
+## Durable exact error-group history (opt-in)
+
+Set `stackwatch.error-history.enabled=true` and configure its nested
+`stackwatch.error-history.datasource.url`, `.username`, and `.password` properties to enable the
+PostgreSQL migration and repository. This datasource is independent from the Incident datasource
+and from L2; when the flag is absent or false, no history datasource or migration is created.
+
+New exact groups are V2-primary. The analyzer checks V2 first, then performs a V1 read-only
+compatibility lookup; it never silently migrates V1 data. A non-blank stable
+`ErrorEvent.Context.Identity.eventId` is required for retry-safe occurrence counting. Missing or
+blank IDs count every submission. The built-in HTTP endpoints generate a new UUID for each request,
+so they should not be treated as retry-idempotent unless an upstream integration preserves the
+event identity. History lookup/recording failures are logged and instrumented, then the analyzer
+continues through the non-durable L2/L3 fallback.
+
+The current change intentionally does not retain every raw occurrence, make L2 restart-safe, or
+retire V1. Those items are deferred to GitHub #6.
 
 ## Context optimization
 

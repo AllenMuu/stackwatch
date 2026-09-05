@@ -18,6 +18,7 @@ StackWatch feeds production exception stack traces to an LLM for root cause loca
 - [Documentation](#documentation)
 - [Architecture](#architecture)
   - [Three-tier merge (core)](#three-tier-merge-core)
+- [Durable error identity history](#durable-error-identity-history)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Current Status](#current-status)
@@ -40,13 +41,19 @@ A five-layer main pipeline plus two cross-cutting layers:
 
 ```mermaid
 flowchart TD
-    C[① Collector<br/>Logback / HTTP / Kafka] --> P[② Preprocessor<br/>fingerprint dedup]
+    C[① Collector<br/>Logback / HTTP / Kafka] --> P[② Preprocessor<br/>raw -> normalized -> V2 identity]
     P --> A[③ Analyzer<br/>L1 / L2 / L3 cascade]
     A --> G[④ Aggregator<br/>surge detection + weekly]
     G --> N[⑤ Notifier<br/>Feishu alert + weekly report]
     A -.-> M[Metrics<br/>latency · accuracy · token cost]
     A -.-> F[Feedback<br/>few-shot flywheel]
 ```
+
+Collection preserves the raw primary-cause chain (`ThrowableInfo`) first. The preprocessor then
+resolves the effective cause, selects stable frames, and normalizes volatile message values before
+rendering V2 fingerprints. The authoritative exact identity is `(appName, fingerprintVersion,
+strictFingerprint)`; a V2 loose fingerprint is retained as a similarity signal only and never
+reuses an RCA or merges an occurrence by itself.
 
 ### Three-tier merge (core)
 
@@ -90,6 +97,48 @@ Use `POST /incidents` with an existing `clusterId`, then `GET /incidents/{id}` a
 `GET /incidents/{id}/report`. Stub Adapters and the Feign-timeout evaluator are deterministic test
 seams, not production integrations; no remediation or recovery is performed.
 
+## Durable error identity history
+
+Exact error groups are in-memory by default, so `mvn spring-boot:run` still starts without a
+database. Enable the independent PostgreSQL history store when exact-group counts and RCA data
+must survive process restarts:
+
+```yaml
+stackwatch:
+  error-history:
+    enabled: true
+    datasource:
+      url: ${ERROR_HISTORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
+      username: ${ERROR_HISTORY_DATASOURCE_USERNAME:stackwatch}
+      password: ${ERROR_HISTORY_DATASOURCE_PASSWORD:}
+```
+
+This datasource and migration are independent of both `stackwatch.incident.enabled` and
+`stackwatch.l2.enabled`. New groups are written as V2. V1 is only a read-only compatibility
+lookup, so existing V1 groups are not silently rewritten or merged into V2. If history lookup or
+occurrence persistence fails, StackWatch logs and instruments the degradation and continues with
+the non-durable L2/L3 analysis path.
+
+For a stable V2 policy, configure the application-frame allowlist and optional wrapper/error-code
+vocabulary:
+
+```yaml
+stackwatch:
+  fingerprint:
+    application-packages: [com.example.orders]
+    wrapper-exception-types: [com.example.OrderRequestException]
+    application-error-codes: [ORDER_NOT_FOUND, PAYMENT_TIMEOUT]
+```
+
+External producers that retry an event must reuse the same non-blank
+`ErrorEvent.Context.Identity.eventId`; missing or blank IDs are counted as separate occurrences.
+The built-in `/collect` and `/analyze` HTTP endpoints currently generate a UUID per request, so a
+client requiring retry-safe counting must use an integration path that preserves its stable event
+ID.
+
+Raw occurrence retention, restart-safe L2, and V1 retirement are deliberately deferred to
+[GitHub issue #6](https://github.com/AllenMuu/stackwatch/issues/6).
+
 ## Requirements
 
 - **JDK 21+** — required by Spring Boot 4.1 + Spring AI 2.0 (Java 8/11/17 not supported)
@@ -121,6 +170,7 @@ MVP - the full five-layer pipeline + two cross-cutting layers are implemented; L
 |-------|--------|
 | Domain data structures (immutable records) | ✅ Done |
 | ② Preprocessor - fingerprint generation (SHA-256 + framework-frame filtering + versioning) | ✅ Done |
+| Durable exact error-group history (opt-in PostgreSQL + idempotent occurrences) | ✅ Done |
 | ③ Analyzer - L1 cache + L2 vector merge + L3 LLM root cause (structured output + Function Calling) | ✅ Done |
 | Context optimization - ContextOptimizer (truncate prompt vars & @Tool returns) | ✅ Done |
 | ① Collector - Logback Appender + HTTP + Kafka (off by default, progressive unlock) | ✅ Done |
