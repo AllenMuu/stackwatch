@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 错误分析器：③分析层核心，三层级联归并。
@@ -225,7 +226,14 @@ public class ErrorAnalyzer {
         vars.put("exceptionType", event.exceptionType());
         vars.put("exceptionMessage", event.exceptionMessage());
         vars.put("stackFrames", String.join("\n", fp.topFrames()));
-        vars.put("mdc", String.valueOf(event.mdc()));
+        // mdc 渲染成 key=value 逐行：使 ContextOptimizer 的 head+tail 截断按整行切，
+        // DoS 触发时输出仍可解析；空 map 给占位避免 prompt 出现空段
+        String mdcText = event.mdc().isEmpty()
+            ? "(empty)"
+            : event.mdc().entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .collect(Collectors.joining("\n"));
+        vars.put("mdc", mdcText);
         vars.put("historicalSamples", historicalSamples);
         vars.put("antiPatterns", antiPatterns);
 

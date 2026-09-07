@@ -46,7 +46,9 @@ public class AnalysisTools {
     @Tool(description = "查询指定 traceId 关联的完整调用链日志，用于还原异常发生前后的上下文（上下游调用、参数、耗时）。")
     public String queryTraceContext(String traceId) {
         // TODO: 接入链路追踪（SkyWalking/ARMS）
-        // ⚠️ 真实接入后单次 trace 日志可过万字符，truncateToolResult 是防爆窗口的最后防线
+        // ⚠️ 真实接入后单次 trace 日志可过万字符，truncateToolResult 是 DoS 兜底。
+        // 接通时应改用 tail 偏置 + 整行截断：trace 是时间序，故障时刻在尾部，
+        // 当前 head+tail 通用兜底在此处不够精准（见 ContextOptimizer#truncateToolResult Javadoc）。
         String result = "[MVP 占位] 链路追踪数据源未接入。";
         return contextOptimizer.truncateToolResult(result, "queryTraceContext");
     }

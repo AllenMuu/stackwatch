@@ -68,12 +68,11 @@ stackwatch:
     tool-call-timeout: 5s
     total-timeout: 30s
   context-optimizer:
-    # Prompt 异常消息字段截断上限（字符）；生产异常 message 可能含完整 SQL/响应体
-    max-exception-message-length: 2000
-    # Prompt MDC 字段截断上限（字符）；MDC 可能携带长 JSON 报文
-    max-mdc-length: 1000
-    # @Tool 返回值截断上限（字符）；queryTraceContext 接 SkyWalking 后单 trace 日志可过万
-    max-tool-result-length: 4000
+    # DoS 兜底天花板（字符）：exceptionMessage / mdc / @Tool 返回值三字段共用。
+    # 定位是防爆窗口的很高 backstop，不是预算管控--qwen-plus 128k 上下文下紧截断只会
+    # 砍掉承载根因的字段（异常 message 尾部常是 SQL Detail / error_description 等具体根因）。
+    # 正常输入永远触不到此上限；切小窗口模型时由部署方显式调小。
+    max-field-length: 65536
   collector:
     kafka:
       # ①采集层 Kafka 通道默认关闭（与 Logback Appender + HTTP /collect 并列的第三入口）

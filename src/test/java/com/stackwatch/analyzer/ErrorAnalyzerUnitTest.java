@@ -96,7 +96,7 @@ class ErrorAnalyzerUnitTest {
             new ClassPathResource("prompts/root-cause.st"));
 
         ContextOptimizer contextOptimizer = new ContextOptimizer(
-            new ContextOptimizerProperties(2000, 1000, 4000));
+            new ContextOptimizerProperties(65536));
         errorAnalyzer = new ErrorAnalyzer(
             fingerprinter, embeddingService, fingerprintCache,
             clusterRepository, chatClient, analysisTools,
