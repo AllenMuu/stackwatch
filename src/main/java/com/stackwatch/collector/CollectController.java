@@ -1,11 +1,16 @@
 package com.stackwatch.collector;
 
 import com.stackwatch.domain.AnalysisResult;
+import com.stackwatch.domain.ThrowableInfo;
 import com.stackwatch.web.AnalyzeRequest;
+import org.springframework.core.MethodParameter;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.JsonNode;
 
 /**
  * 采集层 HTTP 上报入口：POST /collect。
@@ -32,15 +37,38 @@ public class CollectController {
     }
 
     @PostMapping
-    public AnalysisResult collect(@RequestBody AnalyzeRequest request) {
-        // 走字段版 collect 重载：DTO 已携带拆解后的异常字段，无需重建 Throwable
+    public AnalysisResult collect(@RequestBody JsonNode payload)
+        throws MethodArgumentNotValidException {
+        return collect(AnalyzeRequest.fromJson(payload));
+    }
+
+    AnalysisResult collect(AnalyzeRequest request)
+        throws MethodArgumentNotValidException {
+        ThrowableInfo exception = validatedException(request);
         return collector.collect(
             request.appName(),
             request.env(),
-            request.exceptionType(),
-            request.exceptionMessage(),
-            request.stackTrace(),
+            exception,
             request.mdc()
         );
+    }
+
+    private ThrowableInfo validatedException(AnalyzeRequest request)
+        throws MethodArgumentNotValidException {
+        if (!request.hasMixedExceptionForms()) {
+            return request.exceptionOrLegacy();
+        }
+        BeanPropertyBindingResult errors = new BeanPropertyBindingResult(request, "request");
+        errors.reject("exception.form", "exception and legacy exception fields are mutually exclusive");
+        throw new MethodArgumentNotValidException(requestParameter(), errors);
+    }
+
+    private static MethodParameter requestParameter() {
+        try {
+            return new MethodParameter(
+                CollectController.class.getDeclaredMethod("collect", JsonNode.class), 0);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException("Collect endpoint method is unavailable", e);
+        }
     }
 }

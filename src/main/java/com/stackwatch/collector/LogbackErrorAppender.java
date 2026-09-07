@@ -2,16 +2,14 @@ package com.stackwatch.collector;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
-import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import ch.qos.logback.core.AppenderBase;
+import com.stackwatch.domain.ThrowableInfo;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -105,18 +103,14 @@ public class LogbackErrorAppender extends AppenderBase<ILoggingEvent> {
             return;
         }
 
-        List<String> stackTrace = extractStackTrace(proxy);
         Map<String, String> mdc = extractMdc(event);
         String appName = SpringContextHolder.appName();
         String env = SpringContextHolder.env();
+        ThrowableInfo exception = ErrorEventCollector.toThrowableInfo(proxy);
 
         RECURSION_GUARD.set(Boolean.TRUE);
         try {
-            collector.collect(
-                appName, env,
-                proxy.getClassName(), proxy.getMessage(),
-                stackTrace, mdc
-            );
+            collector.collect(appName, env, exception, mdc);
         } catch (Exception e) {
             // 采集失败不得影响业务日志链路：写 stderr 后吞掉（用 stderr 避免经 SLF4J 自递归）
             System.err.println("[stackwatch] collect failed: " + e.getClass().getSimpleName()
@@ -124,17 +118,6 @@ public class LogbackErrorAppender extends AppenderBase<ILoggingEvent> {
         } finally {
             RECURSION_GUARD.remove();
         }
-    }
-
-    private static List<String> extractStackTrace(IThrowableProxy proxy) {
-        StackTraceElementProxy[] proxies = proxy.getStackTraceElementProxyArray();
-        if (proxies == null || proxies.length == 0) {
-            return List.of();
-        }
-        return Arrays.stream(proxies)
-            .map(StackTraceElementProxy::getStackTraceElement)
-            .map(Object::toString)
-            .toList();
     }
 
     private static Map<String, String> extractMdc(ILoggingEvent event) {

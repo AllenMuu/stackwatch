@@ -32,11 +32,51 @@ curl -X POST http://localhost:8080/analyze \
 The exception flows through the five-layer pipeline:
 
 1. **Collector** receives the error event via HTTP
-2. **Fingerprinter** generates a SHA-256 fingerprint with framework-frame filtering
-3. **Analyzer** runs the three-tier cascade: L1 cache miss -> L2 vector merge (if enabled) -> L3 LLM root cause
-4. The result lands in the cluster repository, tagged with `AnalysisPath.LLM_NEW`
+2. **Preprocessor** retains the raw cause chain, resolves the effective cause, normalizes messages and frames, and renders strict/loose V2 fingerprints
+3. **Analyzer** checks the V2 exact identity (durable history/L1), then runs L2 vector merge (if enabled), then L3 LLM root cause
+4. The result lands in the cluster repository, tagged with `AnalysisPath.LLM_NEW`; enabled history also records the occurrence
 5. **Aggregator** picks it up for surge detection and weekly Top-N
 6. **Notifier** pushes a Feishu alert if configured
+
+The exact V2 key is application name + fingerprint version + strict fingerprint. The loose V2
+fingerprint is not an RCA or occurrence-merge key. V1 groups are compatibility data that are
+read-only with respect to migration/re-keying; V1 hits still record accepted occurrence counts.
+New groups are always written as V2.
+
+## Durable error history (optional)
+
+The default run uses an in-memory exact-group repository and needs no database. To persist exact
+groups, RCA data, and idempotent occurrence counts across restarts, enable the independent history
+datasource:
+
+```yaml
+stackwatch:
+  error-history:
+    enabled: true
+    datasource:
+      url: ${ERROR_HISTORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
+      username: ${ERROR_HISTORY_DATASOURCE_USERNAME:stackwatch}
+      password: ${ERROR_HISTORY_DATASOURCE_PASSWORD:}
+```
+
+This is independent of Incident and L2 datasource configuration. On a history lookup or write
+failure, the analyzer logs/instruments the degradation and continues with the non-durable L2/L3
+path; it does not claim a durable occurrence was recorded.
+
+For deterministic V2 frame and message policy, optionally configure:
+
+```yaml
+stackwatch:
+  fingerprint:
+    application-packages: [com.example.orders]
+    wrapper-exception-types: [com.example.OrderRequestException]
+    application-error-codes: [ORDER_NOT_FOUND, PAYMENT_TIMEOUT]
+```
+
+Producers that may retry must preserve the same non-blank `eventId` in
+`ErrorEvent.Context.Identity`; otherwise each submission is counted separately. `/collect` and
+`/analyze` currently generate a UUID per HTTP request, so stable retry semantics require an
+integration path that supplies/preserves the event identity.
 
 ## Enabling L2 (PgVector)
 
@@ -47,6 +87,9 @@ L2 is off by default. Enabling it requires synchronized changes in three places:
 3. Set `stackwatch.l2.enabled=true` and configure `spring.datasource`
 
 See [Architecture](/guide/architecture) for the full L1/L2/L3 cascade design.
+
+Raw occurrence retention, restart-safe L2 state, and V1 retirement are deferred to
+[GitHub issue #6](https://github.com/AllenMuu/stackwatch/issues/6).
 
 ## Enabling Deep Path
 

@@ -1,6 +1,7 @@
 package com.stackwatch.analyzer;
 
 import com.stackwatch.config.AnalysisProperties;
+import com.stackwatch.config.FingerprintProperties;
 import com.stackwatch.domain.AnalysisPath;
 import com.stackwatch.domain.AnalysisResult;
 import com.stackwatch.domain.AntiPattern;
@@ -12,10 +13,18 @@ import com.stackwatch.domain.ReviewLevel;
 import com.stackwatch.domain.RootCauseAnalysis;
 import com.stackwatch.feedback.AntiPatternRepository;
 import com.stackwatch.feedback.FewShotRepository;
+import com.stackwatch.history.ErrorGroup;
+import com.stackwatch.history.ErrorGroupKey;
+import com.stackwatch.history.ErrorGroupRepository;
+import com.stackwatch.history.InMemoryErrorGroupRepository;
+import com.stackwatch.history.RecordOccurrenceCommand;
+import com.stackwatch.history.RecordOccurrenceResult;
 import com.stackwatch.incident.runtime.IncidentEscalator;
 import com.stackwatch.metrics.AnalysisMetrics;
 import com.stackwatch.preprocess.EmbeddingService;
+import com.stackwatch.preprocess.ErrorNormalizer;
 import com.stackwatch.preprocess.Fingerprinter;
+import com.stackwatch.preprocess.NormalizedError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -76,6 +85,9 @@ public class ErrorAnalyzer {
     private final AntiPatternRepository antiPatternRepository;
     private final ContextOptimizer contextOptimizer;
     private final IncidentEscalator incidentEscalator;
+    private final ErrorNormalizer errorNormalizer;
+    private final ErrorGroupRepository errorGroupRepository;
+    private final boolean legacyCacheCompatibility;
 
     public ErrorAnalyzer(Fingerprinter fingerprinter,
                          EmbeddingService embeddingService,
@@ -91,7 +103,7 @@ public class ErrorAnalyzer {
                          ContextOptimizer contextOptimizer) {
         this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
             properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
-            IncidentEscalator.NOOP);
+            defaultNormalizer(properties), new InMemoryErrorGroupRepository(), IncidentEscalator.NOOP, true);
     }
 
     public ErrorAnalyzer(Fingerprinter fingerprinter,
@@ -107,6 +119,47 @@ public class ErrorAnalyzer {
                          AntiPatternRepository antiPatternRepository,
                          ContextOptimizer contextOptimizer,
                          IncidentEscalator incidentEscalator) {
+        this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
+            defaultNormalizer(properties), new InMemoryErrorGroupRepository(), incidentEscalator, true);
+    }
+
+    /** Constructor used by pure analyzer tests and by the Spring wiring constructor below. */
+    ErrorAnalyzer(Fingerprinter fingerprinter,
+                  EmbeddingService embeddingService,
+                  FingerprintCache fingerprintCache,
+                  ClusterRepository clusterRepository,
+                  ChatClient chatClient,
+                  AnalysisTools analysisTools,
+                  AnalysisProperties properties,
+                  PromptTemplateHolder promptTemplate,
+                  AnalysisMetrics metrics,
+                  FewShotRepository fewShotRepository,
+                  AntiPatternRepository antiPatternRepository,
+                  ContextOptimizer contextOptimizer,
+                  ErrorNormalizer errorNormalizer,
+                  ErrorGroupRepository errorGroupRepository) {
+        this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
+            properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
+            errorNormalizer, errorGroupRepository, IncidentEscalator.NOOP, false);
+    }
+
+    private ErrorAnalyzer(Fingerprinter fingerprinter,
+                          EmbeddingService embeddingService,
+                          FingerprintCache fingerprintCache,
+                          ClusterRepository clusterRepository,
+                          ChatClient chatClient,
+                          AnalysisTools analysisTools,
+                          AnalysisProperties properties,
+                          PromptTemplateHolder promptTemplate,
+                          AnalysisMetrics metrics,
+                          FewShotRepository fewShotRepository,
+                          AntiPatternRepository antiPatternRepository,
+                          ContextOptimizer contextOptimizer,
+                          ErrorNormalizer errorNormalizer,
+                          ErrorGroupRepository errorGroupRepository,
+                          IncidentEscalator incidentEscalator,
+                          boolean legacyCacheCompatibility) {
         this.fingerprinter = fingerprinter;
         this.embeddingService = embeddingService;
         this.fingerprintCache = fingerprintCache;
@@ -120,37 +173,98 @@ public class ErrorAnalyzer {
         this.antiPatternRepository = antiPatternRepository;
         this.contextOptimizer = contextOptimizer;
         this.incidentEscalator = Objects.requireNonNull(incidentEscalator, "incidentEscalator is required");
+        this.errorNormalizer = Objects.requireNonNull(errorNormalizer, "errorNormalizer is required");
+        this.errorGroupRepository = Objects.requireNonNull(errorGroupRepository,
+            "errorGroupRepository is required");
+        this.legacyCacheCompatibility = legacyCacheCompatibility;
     }
 
     @Autowired
-    public ErrorAnalyzer(Fingerprinter fingerprinter,
-                         EmbeddingService embeddingService,
-                         FingerprintCache fingerprintCache,
-                         ClusterRepository clusterRepository,
-                         ChatClient chatClient,
-                         AnalysisTools analysisTools,
-                         AnalysisProperties properties,
-                         PromptTemplateHolder promptTemplate,
-                         AnalysisMetrics metrics,
-                         FewShotRepository fewShotRepository,
-                         AntiPatternRepository antiPatternRepository,
-                         ContextOptimizer contextOptimizer,
-                         ObjectProvider<IncidentEscalator> incidentEscalatorProvider) {
+    ErrorAnalyzer(Fingerprinter fingerprinter,
+                  EmbeddingService embeddingService,
+                  FingerprintCache fingerprintCache,
+                  ClusterRepository clusterRepository,
+                  ChatClient chatClient,
+                  AnalysisTools analysisTools,
+                  AnalysisProperties properties,
+                  PromptTemplateHolder promptTemplate,
+                  AnalysisMetrics metrics,
+                  FewShotRepository fewShotRepository,
+                  AntiPatternRepository antiPatternRepository,
+                  ContextOptimizer contextOptimizer,
+                  ErrorNormalizer errorNormalizer,
+                  ErrorGroupRepository errorGroupRepository,
+                  ObjectProvider<IncidentEscalator> incidentEscalatorProvider) {
         this(fingerprinter, embeddingService, fingerprintCache, clusterRepository, chatClient, analysisTools,
             properties, promptTemplate, metrics, fewShotRepository, antiPatternRepository, contextOptimizer,
-            incidentEscalatorProvider.getIfAvailable(() -> IncidentEscalator.NOOP));
+            errorNormalizer, errorGroupRepository,
+            incidentEscalatorProvider.getIfAvailable(() -> IncidentEscalator.NOOP), false);
+    }
+
+    private static ErrorNormalizer defaultNormalizer(AnalysisProperties properties) {
+        return new ErrorNormalizer(new FingerprintProperties(List.of(), List.of(), List.of()),
+            properties.fingerprintTopN());
     }
 
     public AnalysisResult analyze(ErrorEvent event) {
         long start = System.nanoTime();
-        ErrorFingerprint fp = fingerprinter.generate(event);
+        NormalizedError normalized = errorNormalizer.normalize(event);
+        String appName = appName(event);
+        ErrorFingerprint v2 = fingerprinter.generateV2(normalized, appName);
+        ErrorGroupKey v2Key = new ErrorGroupKey(appName, v2.version(), v2.hash());
 
-        // L1: 指纹精确命中缓存
-        Optional<RootCauseAnalysis> cached = fingerprintCache.lookup(fp.hash());
+        // L1: typed exact lookup. A cache hit is only an accelerator: occurrence accounting still
+        // goes through the repository before the result is returned.
+        Optional<ErrorGroup> cached = fingerprintCache.lookup(v2Key);
+        boolean historyAvailable = true;
+        if (cached.isEmpty()) {
+            try {
+                cached = errorGroupRepository.findExact(v2Key);
+            } catch (RuntimeException exception) {
+                historyAvailable = false;
+                recordHistoryFailure("lookup_v2", exception);
+            }
+        }
         if (cached.isPresent()) {
-            log.debug("L1 cache hit: {}", fp.hash());
-            metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
-            return completeFastPath(event, AnalysisResult.cacheHit(fp.hash(), cached.get()));
+            ExactHitOutcome exactHit = recordExactHit(event, v2Key, cached.get(), start);
+            if (exactHit.result().isPresent()) {
+                return exactHit.result().orElseThrow();
+            }
+            historyAvailable = historyAvailable && exactHit.historyAvailable();
+        }
+
+        // Read-only compatibility lookup for groups created by the old V1 algorithm. Never write a
+        // V1 hit back under a V2 key and never use the V2 loose identity as an RCA lookup key.
+        ErrorFingerprint v1 = fingerprinter.generate(event);
+        ErrorGroupKey v1Key = new ErrorGroupKey(appName, v1.version(), v1.hash());
+        if (historyAvailable) {
+            Optional<ErrorGroup> v1Group = fingerprintCache.lookup(v1Key);
+            if (v1Group.isEmpty()) {
+                try {
+                    v1Group = errorGroupRepository.findExact(v1Key);
+                } catch (RuntimeException exception) {
+                    recordHistoryFailure("lookup_v1", exception);
+                    v1Group = Optional.empty();
+                }
+            }
+            if (v1Group.isPresent()) {
+                ExactHitOutcome exactHit = recordExactHit(event, v1Key, v1Group.get(), start);
+                if (exactHit.result().isPresent()) {
+                    return exactHit.result().orElseThrow();
+                }
+                historyAvailable = historyAvailable && exactHit.historyAvailable();
+            }
+        }
+
+        // Compatibility bridge for callers that still seed the old bare-RCA cache API. This path is
+        // disabled for the Spring wiring and can therefore never make the typed cache authoritative.
+        if (legacyCacheCompatibility) {
+            Optional<RootCauseAnalysis> legacy = fingerprintCache.lookup(v1.hash());
+            if (legacy.isPresent()) {
+                log.debug("legacy L1 cache hit: {}", v1.hash());
+                metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
+                return completeFastPath(event, AnalysisResult.cacheHit(v1.hash(), legacy.get()));
+            }
         }
 
         // L2: 向量近似归并
@@ -160,16 +274,23 @@ public class ErrorAnalyzer {
             if (matched.isPresent()) {
                 ErrorCluster updated = matched.get().increment(event.occurredAt());
                 clusterRepository.save(updated);
-                fingerprintCache.put(fp.hash(), updated.analysis());
-                log.debug("L2 vector merged: {} -> cluster {}", fp.hash(), updated.clusterId());
+                ErrorGroup group = newHistoryGroup(v2Key, normalized, v2, updated.clusterId(),
+                    updated.analysis());
+                Optional<ErrorGroup> persisted = persistAndWarm(event, v2Key, group);
+                RootCauseAnalysis resultAnalysis = persisted.map(ErrorGroup::analysis)
+                    .orElse(updated.analysis());
+                String resultClusterId = persisted.map(ErrorGroup::clusterId)
+                    .orElse(updated.clusterId());
+                putLegacyIfNeeded(v2.hash(), resultAnalysis);
+                log.debug("L2 vector merged: {} -> cluster {}", v2.hash(), resultClusterId);
                 metrics.recordAnalysis(AnalysisPath.VECTOR_MERGED, event.appName(), System.nanoTime() - start);
                 return completeFastPath(event,
-                    AnalysisResult.vectorMerged(fp.hash(), updated.clusterId(), updated.analysis()));
+                    AnalysisResult.vectorMerged(v2.hash(), resultClusterId, resultAnalysis));
             }
         }
 
         // L3: 新簇，调 LLM 分析
-        RootCauseAnalysis raw = callLlm(event, fp);
+        RootCauseAnalysis raw = callLlm(event, v2);
         ReviewLevel reviewLevel = classifyReview(raw);
         RootCauseAnalysis analyzed = applyReview(raw, reviewLevel);
         metrics.recordConfidence(analyzed.confidence());
@@ -177,14 +298,110 @@ public class ErrorAnalyzer {
         String clusterId = "cluster-" + UUID.randomUUID();
         ErrorCluster newCluster = ErrorCluster.newOne(
             clusterId, event.appName(), event.exceptionType(),
-            fp.hash(), event.occurredAt(), analyzed, vec);
+            v2.hash(), event.occurredAt(), analyzed, vec);
         clusterRepository.save(newCluster);
-        fingerprintCache.put(fp.hash(), analyzed);
+        ErrorGroup group = newHistoryGroup(v2Key, normalized, v2, clusterId, analyzed);
+        Optional<ErrorGroup> persisted = persistAndWarm(event, v2Key, group);
+        RootCauseAnalysis resultAnalysis = persisted.map(ErrorGroup::analysis).orElse(analyzed);
+        String resultClusterId = persisted.map(ErrorGroup::clusterId).orElse(clusterId);
+        ReviewLevel resultReviewLevel = persisted
+            .filter(persistedGroup -> !persistedGroup.analysis().equals(analyzed))
+            .map(ErrorGroup::analysis)
+            .map(analysis -> ReviewLevel.fromReviewFlag(analysis.needHumanReview()))
+            .orElse(reviewLevel);
+        putLegacyIfNeeded(v2.hash(), resultAnalysis);
         log.info("L3 llm new: {} -> cluster {} (confidence={}, reviewLevel={})",
-            fp.hash(), clusterId, analyzed.confidence(), reviewLevel);
+            v2.hash(), resultClusterId, resultAnalysis.confidence(), resultReviewLevel);
         metrics.recordAnalysis(AnalysisPath.LLM_NEW, event.appName(), System.nanoTime() - start);
-        AnalysisResult fastPathResult = AnalysisResult.llmNew(fp.hash(), clusterId, analyzed, reviewLevel);
+        AnalysisResult fastPathResult = AnalysisResult.llmNew(
+            v2.hash(), resultClusterId, resultAnalysis, resultReviewLevel);
         return completeFastPath(event, fastPathResult);
+    }
+
+    private ExactHitOutcome recordExactHit(ErrorEvent event, ErrorGroupKey key,
+                                           ErrorGroup cachedGroup, long start) {
+        if (cachedGroup.analysis() == null) {
+            recordHistoryFailure("record", new IllegalStateException("exact group has no RCA"));
+            return ExactHitOutcome.historyFailure();
+        }
+        try {
+            RecordOccurrenceResult recorded = errorGroupRepository.record(
+                RecordOccurrenceCommand.existing(cachedGroup, event.eventId(), event.occurredAt()));
+            if (recorded == null || recorded.group() == null || recorded.group().analysis() == null) {
+                throw new IllegalStateException("history repository returned no recorded group");
+            }
+            ErrorGroup group = recorded.group();
+            fingerprintCache.put(key, group);
+            metrics.recordAnalysis(AnalysisPath.CACHE_HIT, event.appName(), System.nanoTime() - start);
+            log.debug("exact {} hit: {}", key.fingerprintVersion(), key.strictFingerprint());
+            return ExactHitOutcome.success(completeFastPath(event,
+                AnalysisResult.cacheHit(key.strictFingerprint(), group.clusterId(), group.analysis())));
+        } catch (RuntimeException exception) {
+            recordHistoryFailure("record", exception);
+            return ExactHitOutcome.historyFailure();
+        }
+    }
+
+    private ErrorGroup newHistoryGroup(ErrorGroupKey key, NormalizedError normalized,
+                                       ErrorFingerprint fingerprint, String clusterId,
+                                       RootCauseAnalysis analysis) {
+        return ErrorGroup.newGroup(new ErrorGroup.ErrorGroupSeed(
+            new ErrorGroup.GroupIdentity(UUID.randomUUID(), key),
+            new ErrorGroup.GroupFacts(fingerprint.looseHash(), normalized.outerExceptionType(),
+                normalized.effectiveExceptionType(), normalized.normalizedRootCauseMessage(),
+                normalized.applicationFrames()),
+            analysis, clusterId));
+    }
+
+    private Optional<ErrorGroup> persistAndWarm(ErrorEvent event, ErrorGroupKey key, ErrorGroup group) {
+        try {
+            RecordOccurrenceResult recorded = errorGroupRepository.record(
+                RecordOccurrenceCommand.newGroup(group, event.eventId(), event.occurredAt()));
+            if (recorded == null || recorded.group() == null) {
+                throw new IllegalStateException("history repository returned no new group");
+            }
+            ErrorGroup persisted = recorded.group();
+            if (persisted.analysis() == null) {
+                throw new IllegalStateException("history repository returned a group without RCA");
+            }
+            // A duplicate means another occurrence already owns this exact identity. Its RCA and
+            // cluster link are authoritative, even if the local L2/L3 candidate was different.
+            fingerprintCache.put(key, persisted);
+            return Optional.of(persisted);
+        } catch (RuntimeException exception) {
+            recordHistoryFailure("record", exception);
+            return Optional.empty();
+        }
+    }
+
+    private record ExactHitOutcome(Optional<AnalysisResult> result, boolean historyAvailable) {
+        private ExactHitOutcome {
+            result = result == null ? Optional.empty() : result;
+        }
+
+        private static ExactHitOutcome success(AnalysisResult result) {
+            return new ExactHitOutcome(Optional.of(result), true);
+        }
+
+        private static ExactHitOutcome historyFailure() {
+            return new ExactHitOutcome(Optional.empty(), false);
+        }
+    }
+
+    private void putLegacyIfNeeded(String fingerprintHash, RootCauseAnalysis analysis) {
+        if (legacyCacheCompatibility) {
+            fingerprintCache.put(fingerprintHash, analysis);
+        }
+    }
+
+    private void recordHistoryFailure(String operation, RuntimeException exception) {
+        log.warn("Error-history {} failed; continuing with non-durable analysis: {}",
+            operation, exception.getMessage());
+        metrics.recordHistoryFailure(operation);
+    }
+
+    private static String appName(ErrorEvent event) {
+        return event.appName() == null || event.appName().isBlank() ? "unknown" : event.appName();
     }
 
     private AnalysisResult completeFastPath(ErrorEvent event, AnalysisResult result) {

@@ -67,6 +67,13 @@ stackwatch:
     max-tool-calls: 3
     tool-call-timeout: 5s
     total-timeout: 30s
+  error-history:
+    # Durable exact identity history is independently opt-in.
+    enabled: false
+    datasource:
+      url: ${ERROR_HISTORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stackwatch}
+      username: ${ERROR_HISTORY_DATASOURCE_USERNAME:stackwatch}
+      password: ${ERROR_HISTORY_DATASOURCE_PASSWORD:}
   context-optimizer:
     # DoS 兜底天花板（字符）：exceptionMessage / mdc / @Tool 返回值三字段共用。
     # 定位是防爆窗口的很高 backstop，不是预算管控--qwen-plus 128k 上下文下紧截断只会
