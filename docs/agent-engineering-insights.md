@@ -6,6 +6,10 @@
 > 与 [upgrade-path.md](./upgrade-path.md) 的关系：后者是**工程实现路线**（V1.1 token 接入 / V1.2 L2 启用 / V2.1 指纹 V2 …），
 > 本文是 **Agent 工程思想视角**的补充——回答"为什么这样升级、哪些思想不该照搬"。
 > 两份文档互补：upgrade-path 管"怎么做"，本文管"为什么、值不值得做"。
+>
+> **2026-08-31 更新**：本文所有“单步 LLM 调用”与“拒绝多步编排”的结论仍适用于默认 Fast Path。
+> 对于显式启用的 Deep Investigation，参见 [ADR 0001](./adr/0001-bounded-deep-investigation.md)：允许有界、只读、可审计的多步调查，
+> 但仍不引入修复执行、断点续传、通用工作流引擎或多 Agent 编排。
 
 ---
 

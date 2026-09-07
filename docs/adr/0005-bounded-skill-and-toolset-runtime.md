@@ -1,0 +1,3 @@
+# Use deterministic Skills and a typed read-only Toolset runtime
+
+Deep Investigation loads versioned SKILL.md resources and deterministically matches them from incident signals rather than using an LLM to choose procedural knowledge. Its separate typed Toolset Registry and Executor normalizes each read-only result before it can become an Observation or Evidence. A hypothesis is VERIFIED only with two independent evidence sources; all other conclusions remain provisional or require human review. The runtime has explicit terminal statuses and configurable limits on steps, calls, and elapsed time.

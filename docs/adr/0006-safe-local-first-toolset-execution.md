@@ -1,0 +1,3 @@
+# Keep first Toolsets local-first and operationally bounded
+
+The Logs, Trace, and Git/Deployment Toolsets ship with complete deterministic Stub Adapters and configuration seams for future real adapters; no external provider is a prerequisite for this change. Investigations run in a bounded local TaskExecutor without recovery or parallel reruns: a restart marks a running investigation FAILED, while repeated triggers are appended to its Active Incident. Only deployment-configured, read-only sources and fixed query scopes are executable; neither the LLM nor an API caller can supply a URL, credential, shell command, SQL, or Kubernetes command.
